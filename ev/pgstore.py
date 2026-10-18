@@ -29,7 +29,7 @@ class PostgresStore(InMemoryStore):
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
-        with psycopg.connect(self._conninfo, options=OPTIONS) as conn:  # commits on success, rolls back on error
+        with psycopg.connect(self._conninfo, connect_timeout=5, options=OPTIONS) as conn:  # commits on success, rolls back on error
             conn.execute("SELECT pg_advisory_xact_lock(1)")
             conn.execute("CREATE TABLE IF NOT EXISTS state (id int PRIMARY KEY, data bytea NOT NULL)")
             row = conn.execute("SELECT data FROM state WHERE id = 1").fetchone()

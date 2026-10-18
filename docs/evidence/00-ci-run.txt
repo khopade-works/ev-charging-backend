@@ -1,5 +1,5 @@
 # CI run 39148868151 for 22ba20890315ff15e08084556a4ff204954c21c4: tests, scans, build, and e2e on kind (incl. bad-release rollback)
-# captured 2026-10-18T23:00:10+05:30 on kind cluster 'ev' (context kind-ev)
+# captured 2026-10-18T23:00:10+05:30 from the GitHub Actions API (gh run view)
 
 $ export GH_TOKEN=$(gh auth token -u khopade-works); gh run view 39148868151 -R khopade-works/ev-charging-backend --json headSha,event,conclusion,url,jobs --jq '"sha=\(.headSha) event=\(.event) conclusion=\(.conclusion)\n\(.url)", (.jobs[] | "\(.name): \(.conclusion)", (.steps[] | "    \(.conclusion)  \(.name)"))'
 sha=22ba20890315ff15e08084556a4ff204954c21c4 event=pull_request conclusion=success

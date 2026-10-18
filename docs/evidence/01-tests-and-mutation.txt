@@ -1,5 +1,5 @@
 # Unit tests on both stores, and a mutation test: the advisory lock is what prevents double-booking across replicas
-# captured 2026-10-18T23:00:06+05:30 on kind cluster 'ev' (context kind-ev)
+# captured 2026-10-18T23:00:06+05:30 locally: pytest against a postgres:17-alpine container on 127.0.0.1:55432 (not the kind cluster)
 # test_last_connector_race[free-replicas]: 2 drivers race for 1 or 2 free connectors through 1 or 2 replicas sharing one database
 
 $ git diff --stat 22ba20890315ff15e08084556a4ff204954c21c4 -- ev tests pyproject.toml requirements.txt; echo '(empty: application code and tests are exactly 22ba208)'

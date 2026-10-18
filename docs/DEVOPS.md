@@ -38,7 +38,7 @@ flowchart LR
 | Failure | Users see | Contained by |
 |---|---|---|
 | One API pod dies | nothing | the other replica serves; liveness restarts it |
-| Postgres down | errors until it's back | readiness takes the API pods out of the Service; the StatefulSet recreates the pod on the same PVC; every transaction opens a fresh connection, so recovery needs no restart |
+| Postgres down | ~15 s of 500s (3 failed readiness probes × 5 s), then connection failures until it's back | readiness takes the API pods out of the Service, and `EvChargingNoAvailablePods` fires (the burn-rate alert can't see requests that never reach a pod); the StatefulSet recreates the pod on the same PVC; every transaction opens a fresh connection, so recovery needs no restart |
 | Bad release that never becomes Ready | nothing | `maxUnavailable: 0` keeps the old pods serving, and `helm --rollback-on-failure` restores the previous revision |
 | Bad release that is Ready but wrong | errors | smoke test and SLO alert, then `helm rollback` |
 | A client vanishes while holding the lock | stalls of up to 10 s | `idle_in_transaction_session_timeout=10s` releases the lock |

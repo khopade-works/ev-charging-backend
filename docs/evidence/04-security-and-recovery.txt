@@ -59,8 +59,8 @@ readyz -> HTTP Error 503: Service Unavailable
 $ kubectl get endpointslices -n ev -l kubernetes.io/service-name=ev-charging -o jsonpath='Service endpoints ready: {.items[*].endpoints[*].conditions.ready}'; echo
 Service endpoints ready: false false
 
-$ curl -s -m 3 -o /dev/null -w 'request during outage: HTTP %{http_code} (000 = no response: no Ready pod behind the Service, so clients get no 500s)\n' 127.0.0.1:8080/version
-request during outage: HTTP 000 (000 = no response: no Ready pod behind the Service, so clients get no 500s)
+$ curl -s -m 3 -o /dev/null -w 'request during outage: HTTP %{http_code} (000 = no response: no Ready pod behind the Service; before readiness failed, ~15 s of DB-backed requests returned 500)\n' 127.0.0.1:8080/version
+request during outage: HTTP 000 (000 = no response: no Ready pod behind the Service; before readiness failed, ~15 s of DB-backed requests returned 500)
 [exit 52]
 
 $ kubectl scale statefulset ev-charging-db -n ev --replicas=1 && sleep 3 && kubectl wait -n ev --for=condition=Ready pod/ev-charging-db-0 --timeout=120s
