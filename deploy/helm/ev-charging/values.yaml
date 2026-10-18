@@ -1,0 +1,8 @@
+image:
+  repository: ghcr.io/khopade-works/ev-charging-backend
+  tag: ""                  # required: the git sha CI built
+  pullPolicy: IfNotPresent
+config:
+  peak: time               # none | time | load; anything else fails startup
+otel:
+  endpoint: http://jaeger.monitoring:4318

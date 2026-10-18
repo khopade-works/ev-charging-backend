@@ -1,0 +1,11 @@
+# kind binds these control-plane components to localhost; scraping them would only raise false alerts.
+kubeEtcd: { enabled: false }
+kubeScheduler: { enabled: false }
+kubeControllerManager: { enabled: false }
+kubeProxy: { enabled: false }
+grafana: { enabled: false }  # the Prometheus UI and Jaeger are enough to inspect metrics and traces
+prometheus:
+  service: { type: NodePort, nodePort: 30090 }
+  prometheusSpec:  # pick up the app's PodMonitor and PrometheusRule, which don't carry this release's labels
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false

@@ -1,0 +1,49 @@
+{{- if .Capabilities.APIVersions.Has "monitoring.coreos.com/v1" }}{{/* kube-prometheus-stack installed */}}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: ev-charging
+spec:
+  selector:
+    matchLabels: { app.kubernetes.io/name: ev-charging, app.kubernetes.io/component: api }
+  podMetricsEndpoints:
+    - port: metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: ev-charging
+spec:
+  groups:
+    - name: ev-charging
+      rules:
+        # SLO: 99.5% of requests are not 5xx. Burn rate 14.4 spends 2% of a 30-day error budget in 1h;
+        # requiring the 5m window too makes the alert resolve soon after recovery.
+        - alert: EvChargingErrorBudgetBurn
+          expr: |
+            sum(rate(http_requests_total{namespace="ev",status=~"5.."}[1h])) / sum(rate(http_requests_total{namespace="ev"}[1h])) > 14.4 * 0.005
+            and sum(rate(http_requests_total{namespace="ev",status=~"5.."}[5m])) / sum(rate(http_requests_total{namespace="ev"}[5m])) > 14.4 * 0.005
+          labels: { severity: critical }
+          annotations:
+            summary: 5xx ratio is burning the 99.5% availability budget over 14x too fast
+            action: if a release just happened, `helm rollback ev -n ev`; else find the failing route in the request metrics and pod logs, then its trace in Jaeger
+        # The error ratio is measured by the pods themselves, so it can't see an outage where none is serving.
+        - alert: EvChargingNoAvailablePods
+          expr: kube_deployment_status_replicas_available{namespace="ev", deployment="ev-charging"} < 1
+          for: 1m
+          labels: { severity: critical }
+          annotations:
+            summary: No API pod is available
+            action: CrashLoopBackOff = bad config, `helm rollback ev -n ev`; Running but not Ready = database unreachable, check `kubectl get pods,pvc -n ev`
+        # User success: a rejected start is a correct answer, but the driver didn't get to charge.
+        - alert: EvChargingSessionStartsRejected
+          expr: |
+            sum(rate(ev_charging_session_start_rejected_total{namespace="ev"}[10m]))
+            / (sum(rate(ev_charging_session_start_rejected_total{namespace="ev"}[10m])) + sum(rate(ev_charging_sessions_started_total{namespace="ev"}[10m])))
+            > 0.5
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: More than half of charging session starts are rejected
+            action: break down by `reason`; NoConnectorAvailable = free capacity (connectors out of service?), InvalidInput/Conflict = client behaviour
+{{- end }}

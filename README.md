@@ -12,6 +12,29 @@ Implemented:
 | Bonus: cancellation | No-show cancel with a flat ₹50.00 fee; releases the connector |
 | Bonus: concurrency safety | One lock across every public service method; a race test for the last free connector |
 
+## Run it on Kubernetes
+
+PR [#1](https://github.com/khopade-works/ev-charging-backend/pull/1) adds Kubernetes, CI/CD, observability and security. It runs on a local kind cluster: 2 API replicas share state through Postgres, the state is one row, and every call takes one advisory lock.
+
+**Prerequisites:** Docker (Colima: `colima start --cpu 6 --memory 10`), `kind`, `kubectl`, `helm` 4, `gh`, `jq`, `openssl` (`brew install colima docker kind kubernetes-cli helm gh jq`).
+
+```bash
+scripts/bootstrap-cluster.sh   # kind cluster, kube-prometheus-stack, Jaeger, namespaces, random DB secret (~5 min, idempotent)
+scripts/deploy.sh <git sha>    # refuses unless CI passed for that sha; rolls out CI's image; checks /version; runs smoke.sh
+scripts/smoke.sh               # user journey: register -> start a session -> end it with a bill -> history
+```
+
+- **Access:** the API is at http://127.0.0.1:8080 (`/version` shows the running git sha), Prometheus (metrics, alerts) at http://127.0.0.1:9090, and Jaeger (traces) at http://127.0.0.1:16686.
+- **Logs:** `kubectl logs -n ev -l app.kubernetes.io/component=api`.
+- **Roll back:** `helm rollback ev -n ev`.
+- **CI** runs on every PR and push to main: tests, then a Trivy scan, then a multi-arch image `ghcr.io/khopade-works/ev-charging-backend:<sha>`, then a Trivy image scan.
+- **Limitations:**
+  - One local cluster and no staging; deploys are manual because GitHub can't reach the laptop.
+  - Postgres is one replica with no backups.
+  - Every call loads the whole state, and writes are serialised.
+  - No TLS or authentication.
+  - Alerts have no receiver configured; they are visible in Prometheus.
+
 ## Quick start
 
 Python ≥ 3.11. Developed on CPython 3.14 via uv.
@@ -22,7 +45,7 @@ uv venv -p 3.14 .venv
 uv pip install --python .venv/bin/python -r pyproject.toml --extra test
 
 # or plain pip
-python3 -m venv .venv && .venv/bin/pip install fastapi uvicorn pytest httpx2
+python3 -m venv .venv && .venv/bin/pip install ".[test]"
 
 # tests
 .venv/bin/pytest -q

@@ -6,6 +6,12 @@ requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.141",
     "uvicorn>=0.54",
+    "psycopg[binary]>=3.2",
+    "prometheus-client>=0.21",
+    "opentelemetry-distro>=0.51b0",
+    "opentelemetry-exporter-otlp-proto-http>=1.30",
+    "opentelemetry-instrumentation-fastapi>=0.51b0",
+    "opentelemetry-instrumentation-psycopg>=0.51b0",
 ]
 
 [project.optional-dependencies]
@@ -18,3 +24,6 @@ test = [
 pythonpath = ["."]
 testpaths = ["tests"]
 filterwarnings = ["error"]
+
+[tool.setuptools]
+packages = ["ev"]

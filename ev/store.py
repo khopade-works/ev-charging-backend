@@ -1,4 +1,4 @@
-import itertools
+from contextlib import nullcontext
 
 from ev.domain import ChargingSession, Conflict, Driver, NotFound, PromoCode, Station
 
@@ -9,10 +9,17 @@ class InMemoryStore:
         self._stations: dict[int, Station] = {}
         self._sessions: dict[int, ChargingSession] = {}
         self._promos: dict[str, PromoCode] = {}
-        self._ids = {kind: itertools.count(1) for kind in ("driver", "station", "session")}
+        self._ids = dict.fromkeys(("driver", "station", "session"), 0)  # ints, not itertools.count: picklable
 
     def next_id(self, kind: str) -> int:
-        return next(self._ids[kind])
+        self._ids[kind] += 1
+        return self._ids[kind]
+
+    def transaction(self) -> nullcontext:
+        return nullcontext()  # the service lock is enough for one process; PostgresStore overrides this
+
+    def ping(self) -> None:
+        pass
 
     def add_driver(self, driver: Driver) -> None:
         self._drivers[driver.id] = driver

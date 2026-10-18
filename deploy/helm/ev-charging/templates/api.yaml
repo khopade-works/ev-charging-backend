@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ev-charging
+spec:
+  replicas: 2
+  strategy:
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }  # a new pod must be Ready before an old one stops
+  selector:
+    matchLabels: { app.kubernetes.io/name: ev-charging, app.kubernetes.io/component: api }
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ev-charging
+        app.kubernetes.io/component: api
+        app.kubernetes.io/version: {{ .Values.image.tag | quote }}
+    spec:
+      automountServiceAccountToken: false  # the app never calls the Kubernetes API
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: api
+          image: "{{ .Values.image.repository }}:{{ required "image.tag must be a git sha" .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - { name: http, containerPort: 8000 }
+            - { name: metrics, containerPort: 9000 }
+          env:
+            - { name: EV_STORE, value: postgres }
+            - { name: PGHOST, value: ev-charging-db }
+            - { name: PGUSER, value: ev }
+            - name: PGPASSWORD
+              valueFrom: { secretKeyRef: { name: ev-charging-db, key: password } }
+            - { name: EV_PEAK, value: {{ .Values.config.peak | quote }} }
+            - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ .Values.otel.endpoint | quote }} }
+          livenessProbe:  # the process answers; the database is readiness's concern, restarting won't fix it
+            httpGet: { path: /version, port: http }
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+          lifecycle:
+            preStop: { sleep: { seconds: 5 } }  # keep serving until the Service has stopped routing here
+          resources:  # no CPU limit: throttling adds latency, and the request already guarantees a share
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { memory: 256Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: [ALL] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ev-charging
+spec:
+  type: NodePort  # kind maps node port 30080 to 127.0.0.1:8080; the metrics port is not exposed
+  selector: { app.kubernetes.io/name: ev-charging, app.kubernetes.io/component: api }
+  ports:
+    - { port: 80, targetPort: http, nodePort: 30080 }
