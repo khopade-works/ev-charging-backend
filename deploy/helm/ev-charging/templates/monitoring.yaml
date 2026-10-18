@@ -1,12 +1,4 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: ev-charging-dashboard
-  labels: { grafana_dashboard: "1" }  # loaded by Grafana's dashboard sidecar
-data:
-  ev-charging.json: {{ .Files.Get "dashboard.json" | quote }}
-{{- if .Capabilities.APIVersions.Has "monitoring.coreos.com/v1" }}{{/* absent on a bare cluster, e.g. in CI */}}
----
+{{- if .Capabilities.APIVersions.Has "monitoring.coreos.com/v1" }}{{/* kube-prometheus-stack installed */}}
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
@@ -34,7 +26,7 @@ spec:
           labels: { severity: critical }
           annotations:
             summary: 5xx ratio is burning the 99.5% availability budget over 14x too fast
-            runbook_url: https://github.com/khopade-works/ev-charging-backend/blob/main/docs/RUNBOOK.md#evchargingerrorbudgetburn
+            action: if a release just happened, `helm rollback ev -n ev`; else find the failing route in the request metrics and pod logs, then its trace in Jaeger
         # The error ratio is measured by the pods themselves, so it can't see an outage where none is serving.
         - alert: EvChargingNoAvailablePods
           expr: kube_deployment_status_replicas_available{namespace="ev", deployment="ev-charging"} < 1
@@ -42,7 +34,7 @@ spec:
           labels: { severity: critical }
           annotations:
             summary: No API pod is available
-            runbook_url: https://github.com/khopade-works/ev-charging-backend/blob/main/docs/RUNBOOK.md#evchargingnoavailablepods
+            action: CrashLoopBackOff = bad config, `helm rollback ev -n ev`; Running but not Ready = database unreachable, check `kubectl get pods,pvc -n ev`
         # User success: a rejected start is a correct answer, but the driver didn't get to charge.
         - alert: EvChargingSessionStartsRejected
           expr: |
@@ -53,5 +45,5 @@ spec:
           labels: { severity: warning }
           annotations:
             summary: More than half of charging session starts are rejected
-            runbook_url: https://github.com/khopade-works/ev-charging-backend/blob/main/docs/RUNBOOK.md#evchargingsessionstartsrejected
+            action: break down by `reason`; NoConnectorAvailable = free capacity (connectors out of service?), InvalidInput/Conflict = client behaviour
 {{- end }}

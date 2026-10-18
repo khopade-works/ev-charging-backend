@@ -6,17 +6,12 @@ import psycopg
 
 from ev.store import InMemoryStore
 
-# The session timeout frees the lock if a client vanishes mid-transaction (e.g. its node dies without a TCP reset).
-OPTIONS = "-c idle_in_transaction_session_timeout=10s"
-
 
 class PostgresStore(InMemoryStore):
-    """InMemoryStore whose state lives in one Postgres row, shared by every replica.
+    """InMemoryStore whose state is one Postgres row, shared by all replicas: each call locks, loads, runs, saves.
 
-    Each transaction takes a global advisory lock, loads the state, runs the service call, and saves the state.
-    ponytail: whole state per call + one lock = O(data) per request and serialised writes.
-    Upgrade: a table per aggregate and a conditional claim (UPDATE ... WHERE status='AVAILABLE').
-    pickle is safe here: only this app writes the row, and only API pods can reach the database.
+    ponytail: O(data) per call and serialised writes; upgrade to a table per aggregate + conditional claim UPDATE.
+    pickle is safe here: only this app writes the row, and only API pods can reach the database (NetworkPolicy).
     """
 
     def __init__(self, conninfo: str = "") -> None:  # "": libpq reads PGHOST, PGPASSWORD, ... from the environment
@@ -29,7 +24,8 @@ class PostgresStore(InMemoryStore):
 
     @contextmanager
     def transaction(self) -> Iterator[None]:
-        with psycopg.connect(self._conninfo, connect_timeout=5, options=OPTIONS) as conn:  # commits on success, rolls back on error
+        with psycopg.connect(self._conninfo, connect_timeout=5,  # commits on success, rolls back on error
+                             options="-c idle_in_transaction_session_timeout=10s") as conn:  # frees the lock if a client dies
             conn.execute("SELECT pg_advisory_xact_lock(1)")
             conn.execute("CREATE TABLE IF NOT EXISTS state (id int PRIMARY KEY, data bytea NOT NULL)")
             row = conn.execute("SELECT data FROM state WHERE id = 1").fetchone()

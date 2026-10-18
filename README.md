@@ -1,6 +1,6 @@
 # EV Charging Network — backend
 
-A backend for an EV charging network. Drivers register a vehicle. A session is started by searching a radius for a free, compatible connector, with AC→DC fallback, and is billed on tiered AC/DC tariffs with optional promo codes. The domain, pricing, selection and service layers are plain Python and use only the standard library. FastAPI is used only as the HTTP transport. Locally it runs on an in-memory store; on Kubernetes it runs as replicas over Postgres ([run it on Kubernetes](#run-it-on-kubernetes)).
+An in-memory backend for an EV charging network. Drivers register a vehicle. A session is started by searching a radius for a free, compatible connector, with AC→DC fallback, and is billed on tiered AC/DC tariffs with optional promo codes. The domain, pricing, selection and service layers are plain Python and use only the standard library. FastAPI is used only as the HTTP transport.
 
 Implemented:
 
@@ -14,55 +14,47 @@ Implemented:
 
 ## Run it on Kubernetes
 
-The DevOps work (PR [#1](https://github.com/khopade-works/ev-charging-backend/pull/1), baseline [`2d5080b`](https://github.com/khopade-works/ev-charging-backend/commit/2d5080bca198149bf84ac43b15528213584ef707)) runs the app on a local kind cluster with Postgres, CI/CD, metrics, logs, traces and alerts. Design and trade-offs: [docs/DEVOPS.md](docs/DEVOPS.md). Alert responses: [docs/RUNBOOK.md](docs/RUNBOOK.md). Proof: [docs/evidence](docs/evidence/README.md).
+PR [#1](https://github.com/khopade-works/ev-charging-backend/pull/1) adds Kubernetes, CI/CD, observability and security. It runs on a local kind cluster: 2 API replicas share state through Postgres, the state is one row, and every call takes one advisory lock.
 
-**Prerequisites** (macOS; tested with these versions): a Docker runtime (Colima 0.10 or Docker Desktop, ≥ 6 CPU / 10 GB for the VM), `kind` 0.33, `kubectl` 1.37, `helm` 4.3, `gh` (any account can read the public repo), `jq`, `openssl`. `brew install colima docker kind kubernetes-cli helm gh jq`, then `colima start --cpu 6 --memory 10`.
+**Prerequisites:** Docker (Colima: `colima start --cpu 6 --memory 10`), `kind`, `kubectl`, `helm` 4, `gh`, `jq`, `openssl` (`brew install colima docker kind kubernetes-cli helm gh jq`).
 
 ```bash
-scripts/bootstrap-cluster.sh       # kind cluster 'ev', kube-prometheus-stack, Jaeger, namespace 'ev', random secrets; idempotent, ~5 min
-scripts/deploy.sh <40-char sha>    # refuses without a green CI run for that sha; deploys CI's image, checks /version, runs smoke.sh
-scripts/smoke.sh                   # the user journey: register → start with a promo → end with a bill → history
+scripts/bootstrap-cluster.sh   # kind cluster, kube-prometheus-stack, Jaeger, namespaces, random DB secret (~5 min, idempotent)
+scripts/deploy.sh <git sha>    # refuses unless CI passed for that sha; rolls out CI's image; checks /version; runs smoke.sh
+scripts/smoke.sh               # user journey: register -> start a session -> end it with a bill -> history
 ```
 
-| What | Where |
-|---|---|
-| API (+ Swagger at `/docs`) | http://127.0.0.1:8080 |
-| Grafana, dashboard "EV Charging" | http://127.0.0.1:3000, user `admin`, password: `kubectl -n monitoring get secret grafana-admin -o jsonpath='{.data.admin-password}' \| base64 -d` |
-| Prometheus (targets, alerts) | http://127.0.0.1:9090 |
-| Jaeger (traces, service `ev-charging`) | http://127.0.0.1:16686 |
-| Logs | `kubectl logs -n ev -l app.kubernetes.io/component=api -f \| jq` |
-| Release history / rollback | `helm history ev -n ev`, `helm rollback ev -n ev --wait` |
-
-All host ports bind to 127.0.0.1. Building and deploying without CI (e.g. offline): `docker build --build-arg GIT_SHA=$(git rev-parse HEAD) -t ghcr.io/khopade-works/ev-charging-backend:dev . && kind load docker-image --name ev ghcr.io/khopade-works/ev-charging-backend:dev && helm upgrade --install ev deploy/helm/ev-charging -n ev --set image.tag=dev --rollback-on-failure --wait`.
-
-**Tools:** GitHub Actions, GHCR, kind, Helm, kube-prometheus-stack (Prometheus, Alertmanager, Grafana, kube-state-metrics), Jaeger v2, OpenTelemetry, Trivy.
-
-**Known limitations:** one local cluster stands in for production (no staging); promotion is manual because GitHub can't reach the laptop; Postgres is one replica without backups; every call loads the whole state and writes are serialised by one database lock (see [DEVOPS.md](docs/DEVOPS.md#architecture)); no TLS and no API authentication (assumption A23); Alertmanager has no receiver (alerts are visible in Prometheus); Jaeger keeps traces in memory.
+- **Access:** the API is at http://127.0.0.1:8080 (`/version` shows the running git sha), Prometheus (metrics, alerts) at http://127.0.0.1:9090, and Jaeger (traces) at http://127.0.0.1:16686.
+- **Logs:** `kubectl logs -n ev -l app.kubernetes.io/component=api`.
+- **Roll back:** `helm rollback ev -n ev`.
+- **CI** runs on every PR and push to main: tests, then a Trivy scan, then a multi-arch image `ghcr.io/khopade-works/ev-charging-backend:<sha>`, then a Trivy image scan.
+- **Limitations:**
+  - One local cluster and no staging; deploys are manual because GitHub can't reach the laptop.
+  - Postgres is one replica with no backups.
+  - Every call loads the whole state, and writes are serialised.
+  - No TLS or authentication.
+  - Alerts have no receiver configured; they are visible in Prometheus.
 
 ## Quick start
 
 Python ≥ 3.11. Developed on CPython 3.14 via uv.
 
 ```bash
-# uv (exact, hash-locked versions, as in CI and the image)
+# uv
 uv venv -p 3.14 .venv
-uv pip install --python .venv/bin/python --require-hashes -r requirements-dev.txt
+uv pip install --python .venv/bin/python -r pyproject.toml --extra test
 
 # or plain pip
-python3.14 -m venv .venv && .venv/bin/pip install --require-hashes -r requirements-dev.txt
+python3 -m venv .venv && .venv/bin/pip install fastapi uvicorn pytest httpx2
 
-# tests (in-memory store), then the same suites against Postgres
+# tests
 .venv/bin/pytest -q
-docker run -d --rm --name ev-pg -e POSTGRES_USER=ev -e POSTGRES_PASSWORD=ev -e POSTGRES_DB=ev -p 127.0.0.1:55432:5432 postgres:17-alpine
-EV_TEST_DATABASE_URL=postgresql://ev:ev@127.0.0.1:55432/ev .venv/bin/pytest -q
 
 # server
 EV_PEAK=none .venv/bin/uvicorn ev.api:app
 ```
 
-Lock files are generated from `pyproject.toml`: `uv pip compile pyproject.toml --universal --python-version 3.14 --generate-hashes -o requirements.txt` (add `--extra test` for `requirements-dev.txt`).
-
-With the in-memory store (the default outside Kubernetes), run a **single process only**. Don't pass `--workers` and don't set `WEB_CONCURRENCY` > 1. The store is in memory and the lock is in-process, so N workers would mean N independent stores. With `EV_STORE=postgres` the lock is a Postgres advisory lock, so any number of processes and replicas share one store.
+Run a **single process only**. Don't pass `--workers` and don't set `WEB_CONCURRENCY` > 1. The store is in memory and the lock is in-process, so N workers would mean N independent stores.
 
 - Swagger UI: `http://127.0.0.1:8000/docs`
 - Scripted walkthrough: `./demo.sh` against a **fresh** server (ids are deterministic). `./demo.sh seed` only seeds.
@@ -251,7 +243,7 @@ Caveat on `cheapest`: tariffs are global and every candidate in a call shares th
   Public methods never call each other, and private helpers assume the lock is held. That is why this is `Lock`, not `RLock`.
 - **All routes are plain `def`,** so FastAPI runs them on a threadpool. The race is real, and a future blocking DB call won't stall the event loop.
 - **`Connector.claim()` raising on a non-AVAILABLE connector is a state-machine invariant, not a concurrency guard.** It is check-then-act itself. Without the lock, the losing request would get a generic `Conflict` even when another connector is free.
-- **Single process only with `InMemoryStore`.** The lock and the store both live in one process. `PostgresStore` keeps the same rule with a Postgres advisory lock taken per service call, shared by every process and replica; the race test also runs as two replicas on one database.
+- **Single process only.** The lock and the store both live in one process.
 - **Race test (C1).** A barrier alone doesn't discriminate: two threads released together can still serialize. So the test injects a strategy that sleeps 50 ms, which widens the scan→claim window. Two threads start behind a `Barrier(2, timeout=5)`, and results are read with a timeout so a deadlock fails instead of hanging. The test is parametrized over 1 and 2 free connectors.
 - **DB upgrade path:**
   - Partial unique indexes on `sessions(connector_id)` and `sessions(driver_id)` `WHERE status='ACTIVE'`.
@@ -260,7 +252,7 @@ Caveat on `cheapest`: tariffs are global and every candidate in a call shares th
 
 ### Persistence
 
-`InMemoryStore` holds everything in memory and loses it on restart. `PostgresStore` (`ev/pgstore.py`, selected with `EV_STORE=postgres`) subclasses it. Each service call takes a Postgres advisory lock, loads the whole state from one row, runs, and saves the state again, so the service needed no `save()` calls (ceiling: O(data) per call; see [docs/DEVOPS.md](docs/DEVOPS.md)). For comparison, here is what the original estimate said a database would touch:
+Everything is held in memory in `InMemoryStore` and lost on restart. The service mutates entities in place, so persistence is implicit today. Swapping in a database honestly touches:
 
 - a new store class with the same methods and semantics;
 - explicit `save()` calls at about 6 mutation sites in `service.py`;
@@ -293,7 +285,7 @@ Domain, pricing and selection don't change.
 | A18 | Money is Decimal rupees, rounded half-up to paise at each displayed stage; discount = subtotal − total; JSON strings. |
 | A19 | `0 ≤ energy ≤ 1000 kWh`, any precision. |
 | A20 | Peak hours are 18:00–22:00 IST (fixed +05:30), ×1.5. The load rule is `1 + load/2`, rounded to 2 dp, where load = occupied ÷ in-service connectors, measured at start. |
-| A21 | `InMemoryStore`: single process, data lost on restart. `PostgresStore`: shared by all replicas, persisted on a volume. |
+| A21 | Single process; in-memory; data is lost on restart. |
 | A22 | Server-generated sequential integer ids; connector ids are per station. |
 | A23 | No authentication; all callers are trusted. |
 
@@ -317,13 +309,14 @@ Domain, pricing and selection don't change.
 
 ## What I would change with more time
 
-- Replace the global advisory lock with partial unique indexes on active sessions and a conditional `UPDATE … WHERE status='AVAILABLE'` claim (Postgres itself is done, see [docs/DEVOPS.md](docs/DEVOPS.md)).
+- Postgres, with partial unique indexes on active sessions and a conditional `UPDATE … WHERE status='AVAILABLE'` claim replacing the lock.
 - Authentication and operator/driver roles.
 - Per-station tariffs, snapshotted on the session (this also makes `cheapest` meaningful).
 - Promo usage limits, per-driver-once and expiry.
 - Reservations, with no-show auto-expiry (needs a scheduler).
 - mypy in CI.
 - Idempotency keys on start/end/cancel.
+- Observability: structured logs, metrics, tracing.
 
 ## Live extension notes
 

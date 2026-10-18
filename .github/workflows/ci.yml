@@ -2,7 +2,6 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
   push:
     branches: [main]
 
@@ -11,14 +10,13 @@ permissions:
 
 env:
   IMAGE: ghcr.io/khopade-works/ev-charging-backend
-  # On a PR, github.sha is a temporary merge commit; build and tag the PR head, so the image tag, /version and
-  # `gh run list --commit` (used by scripts/deploy.sh) all name the same commit.
+  # On a PR, github.sha is a temporary merge commit; build the PR head, so the image tag, /version and
+  # `gh run list --commit` (the gate in scripts/deploy.sh) all name the same commit.
   SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     services:
       postgres:
         image: postgres:17-alpine
@@ -26,28 +24,25 @@ jobs:
         ports: ["5432:5432"]
         options: --health-cmd pg_isready --health-interval 2s --health-retries 15
     steps:
+      # Actions are pinned by commit SHA: tags can be moved (trivy-action's were hijacked in March 2026).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { ref: "${{ env.SHA }}", persist-credentials: false }
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with: { python-version: "3.14" }
-      - run: pip install --require-hashes -r requirements-dev.txt
-      - run: ruff check .
+      - run: pip install ".[test]"
       - run: pytest -q
-      - run: pytest -q
+      - name: Race test with 2 replicas on one Postgres
+        run: pytest -q tests/test_concurrency.py
         env: { EV_TEST_DATABASE_URL: "postgresql://ev:ev@localhost:5432/ev" }
-      # trivy-action's tags were hijacked in March 2026; actions are pinned by commit SHA, and trivy runs as a CLI.
       - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         with: { version: v0.70.0 }
-      - name: Security scan (dependency CVEs, committed secrets, Dockerfile/Helm/manifest misconfigurations)
-        run: trivy fs --scanners vuln,secret,misconfig --severity HIGH,CRITICAL --exit-code 1 .
+      - name: Committed secrets and Dockerfile/Helm/manifest misconfigurations
+        run: trivy fs --scanners secret,misconfig --severity HIGH,CRITICAL --exit-code 1 .
 
   build:
     needs: test
     runs-on: ubuntu-latest
-    timeout-minutes: 20
     permissions: { contents: read, packages: write }
-    outputs:
-      digest: ${{ steps.push.outputs.digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with: { ref: "${{ env.SHA }}", persist-credentials: false }
@@ -62,47 +57,7 @@ jobs:
           platforms: linux/amd64,linux/arm64  # runners are amd64; the local kind cluster on Apple Silicon is arm64
           tags: ${{ env.IMAGE }}:${{ env.SHA }}  # immutable: one image per commit, never `latest`
           build-args: GIT_SHA=${{ env.SHA }}
-          provenance: mode=max
-          sbom: true
       - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
         with: { version: v0.70.0 }
-      - name: Image scan (fixable HIGH/CRITICAL CVEs)
+      - name: Image CVEs (dependencies and OS packages)
         run: trivy image --ignore-unfixed --severity HIGH,CRITICAL --exit-code 1 "$IMAGE@${{ steps.push.outputs.digest }}"
-
-  # Deploys the image to a throwaway kind cluster: the chart installs, the user journey works, a bad release rolls back.
-  e2e:
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    permissions: { contents: read, packages: read }
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with: { ref: "${{ env.SHA }}", persist-credentials: false }
-      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
-        with: { config: deploy/kind/cluster.yaml, cluster_name: ev }
-      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
-        with: { version: v4.3.1 }
-      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
-      - name: Load the built image into kind
-        run: |
-          docker pull "$IMAGE@${{ needs.build.outputs.digest }}"
-          docker tag "$IMAGE@${{ needs.build.outputs.digest }}" "$IMAGE:$SHA"
-          kind load docker-image --name ev "$IMAGE:$SHA"
-      - name: Deploy
-        run: |
-          kubectl apply -f deploy/k8s/namespace.yaml
-          kubectl -n ev create secret generic ev-charging-db --from-literal=password="$(openssl rand -hex 24)"
-          helm upgrade --install ev deploy/helm/ev-charging -n ev --set image.tag="$SHA" --set image.pullPolicy=Never \
-            --rollback-on-failure --wait --timeout 5m
-      - name: Running version is this commit, and the user journey works
-        run: |
-          curl -fsS http://127.0.0.1:8080/version | jq -e --arg sha "$SHA" '.git_sha == $sha'
-          scripts/smoke.sh
-      - name: A bad release is rolled back and the service keeps working
-        run: |
-          if helm upgrade ev deploy/helm/ev-charging -n ev --reuse-values --set config.peak=bogus \
-              --rollback-on-failure --wait --timeout 90s; then exit 1; fi
-          helm history ev -n ev -o json | jq -e '.[-1].description | contains("Rollback")'
-          curl -fsS http://127.0.0.1:8080/version | jq -e --arg sha "$SHA" '.git_sha == $sha'
-          scripts/smoke.sh

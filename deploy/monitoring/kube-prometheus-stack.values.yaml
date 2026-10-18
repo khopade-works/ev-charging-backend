@@ -3,16 +3,7 @@ kubeEtcd: { enabled: false }
 kubeScheduler: { enabled: false }
 kubeControllerManager: { enabled: false }
 kubeProxy: { enabled: false }
-
-grafana:
-  admin:  # random password created by scripts/bootstrap-cluster.sh, instead of the chart's well-known default
-    existingSecret: grafana-admin
-    userKey: admin-user
-    passwordKey: admin-password
-  service: { type: NodePort, nodePort: 30300 }
-  sidecar:
-    dashboards: { searchNamespace: ALL }  # the app's dashboard ConfigMap lives in namespace ev
-
+grafana: { enabled: false }  # the Prometheus UI and Jaeger are enough to inspect metrics and traces
 prometheus:
   service: { type: NodePort, nodePort: 30090 }
   prometheusSpec:  # pick up the app's PodMonitor and PrometheusRule, which don't carry this release's labels

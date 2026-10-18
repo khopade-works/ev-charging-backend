@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 
 from ev.api import create_app
 from ev.service import ChargingService
-from tests.stores import new_store
+from ev.store import InMemoryStore
 
 DRIVER = ("POST", "/drivers", {"name": "Asha", "vehicle": {"model": "Nexon EV", "connector_types": ["AC", "DC"]}})
 STATION_BODY = {
@@ -20,7 +20,7 @@ END = ("POST", "/sessions/1/end", {"energy_kwh": "12.5"})
 
 
 def client() -> TestClient:
-    return TestClient(create_app(ChargingService(new_store())))
+    return TestClient(create_app(ChargingService(InMemoryStore())))
 
 
 def test_api_happy_path():

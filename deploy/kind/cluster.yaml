@@ -7,7 +7,6 @@ nodes:
   - role: control-plane
     extraPortMappings:
       - { containerPort: 30080, hostPort: 8080, listenAddress: "127.0.0.1" }   # app
-      - { containerPort: 30300, hostPort: 3000, listenAddress: "127.0.0.1" }   # Grafana
       - { containerPort: 30090, hostPort: 9090, listenAddress: "127.0.0.1" }   # Prometheus
       - { containerPort: 30686, hostPort: 16686, listenAddress: "127.0.0.1" }  # Jaeger UI
   - role: worker

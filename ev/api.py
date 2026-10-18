@@ -1,6 +1,4 @@
 import asyncio
-import json
-import logging
 import os
 import time
 from decimal import Decimal
@@ -8,7 +6,6 @@ from decimal import Decimal
 import psycopg
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-from opentelemetry import trace
 from prometheus_client import Counter, Histogram, start_http_server
 from pydantic import BaseModel
 
@@ -36,18 +33,7 @@ REQUESTS = Counter("http_requests", "HTTP requests served", ["method", "route", 
 LATENCY = Histogram("http_request_duration_seconds", "HTTP request latency", ["method", "route"])
 STARTED = Counter("ev_charging_sessions_started", "Charging sessions started")
 REJECTED = Counter("ev_charging_session_start_rejected", "Charging session starts rejected", ["reason"])
-PROBES = ("/version", "/readyz")  # kept out of metrics and logs: they would drown real traffic
-log = logging.getLogger("ev")
-
-
-class JsonFormatter(logging.Formatter):
-    def format(self, record: logging.LogRecord) -> str:
-        trace_id = trace.get_current_span().get_span_context().trace_id  # links a log line to its trace in Jaeger
-        doc = {"ts": self.formatTime(record), "level": record.levelname, "logger": record.name,
-               "msg": record.getMessage(), "trace_id": f"{trace_id:032x}", **getattr(record, "fields", {})}
-        if record.exc_info:
-            doc["exc"] = self.formatException(record.exc_info)
-        return json.dumps(doc)
+PROBES = ("/version", "/readyz")  # kept out of request metrics
 
 
 class VehicleIn(BaseModel):
@@ -121,11 +107,8 @@ def create_app(service: ChargingService | None = None) -> FastAPI:
             route = request.scope.get("route")
             path = route.path if route else "unmatched"  # the route template keeps label cardinality bounded
             if path not in PROBES:
-                elapsed = time.perf_counter() - started
                 REQUESTS.labels(request.method, path, status).inc()
-                LATENCY.labels(request.method, path).observe(elapsed)
-                fields = {"method": request.method, "route": path, "status": status, "ms": round(elapsed * 1000, 1)}
-                log.info("request", extra={"fields": fields})
+                LATENCY.labels(request.method, path).observe(time.perf_counter() - started)
 
     # Probes are async so they never queue behind requests in the threadpool: a busy pod is not a dead one.
     @app.get("/version")  # also the liveness probe: answers without touching the database
@@ -198,9 +181,4 @@ def create_app(service: ChargingService | None = None) -> FastAPI:
 
 app = create_app()
 if port := os.environ.get("EV_METRICS_PORT"):  # set in the image only; tests import this module too
-    handler = logging.StreamHandler()
-    handler.setFormatter(JsonFormatter())
-    logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
-    logging.getLogger("uvicorn").handlers.clear()  # uvicorn's own lines (startup, tracebacks) go out as JSON too
-    logging.getLogger("uvicorn").propagate = True
     start_http_server(int(port))  # its own port, so the public Service never exposes /metrics

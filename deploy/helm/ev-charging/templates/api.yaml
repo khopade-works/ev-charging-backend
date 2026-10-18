@@ -19,12 +19,6 @@ spec:
       securityContext:
         runAsNonRoot: true
         seccompProfile: { type: RuntimeDefault }
-      topologySpreadConstraints:  # replicas on different nodes when possible, so one node loss leaves one serving
-        - maxSkew: 1
-          topologyKey: kubernetes.io/hostname
-          whenUnsatisfiable: ScheduleAnyway
-          labelSelector:
-            matchLabels: { app.kubernetes.io/name: ev-charging, app.kubernetes.io/component: api }
       containers:
         - name: api
           image: "{{ .Values.image.repository }}:{{ required "image.tag must be a git sha" .Values.image.tag }}"
