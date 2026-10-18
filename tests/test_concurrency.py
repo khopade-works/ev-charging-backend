@@ -1,6 +1,7 @@
-"""Removing the store lock turns this red (the loser gets Conflict from claim()).
+"""Removing the lock turns this red (the loser gets Conflict from claim()).
 
-With Postgres it also runs as two replicas: two stores, two connection pools, one database."""
+With Postgres it also runs as 2 replicas (2 stores and 2 service locks, one database): then only the advisory lock
+keeps it green."""
 
 import threading
 import time
@@ -26,9 +27,7 @@ def slow_nearest(c):
 @pytest.mark.parametrize("replicas", [1, 2] if DATABASE_URL else [1])
 @pytest.mark.parametrize("free", [1, 2])
 def test_last_connector_race(free, replicas):
-    store = new_store()
-    services = [ChargingService(s, strategy=slow_nearest, clock=lambda: T0)
-                for s in [store, *(new_store(fresh=False) for _ in range(replicas - 1))]]
+    services = [ChargingService(new_store(fresh=i == 0), strategy=slow_nearest, clock=lambda: T0) for i in range(replicas)]
     svc = services[0]
     station = svc.register_station("S", HERE, [(ConnectorType.DC, 50.0)] * free)
     vehicle = Vehicle("V", frozenset({ConnectorType.DC}))
@@ -54,6 +53,5 @@ def test_last_connector_race(free, replicas):
     else:
         assert outcomes == ["OK", "OK"]
         assert len({s.connector_id for s in active}) == 2
-    with store.transaction():
-        connectors = store.get_station(station.id).connectors
-    assert all(c.status is ConnectorStatus.OCCUPIED for c in connectors)
+    with svc._store.transaction():
+        assert all(c.status is ConnectorStatus.OCCUPIED for c in svc._store.get_station(station.id).connectors)

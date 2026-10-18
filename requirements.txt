@@ -221,6 +221,7 @@ opentelemetry-api==1.45.1 \
     --hash=sha256:b31553efa588ae44bc306f863c785c5333a9ecc091248c6ee68b4b6c87fdedfb
     # via
     #   fastapi
+    #   opentelemetry-distro
     #   opentelemetry-exporter-http-transport
     #   opentelemetry-exporter-otlp-proto-http
     #   opentelemetry-instrumentation
@@ -230,6 +231,10 @@ opentelemetry-api==1.45.1 \
     #   opentelemetry-instrumentation-psycopg
     #   opentelemetry-sdk
     #   opentelemetry-semantic-conventions
+opentelemetry-distro==0.66b1 \
+    --hash=sha256:bf29f42ed11397c6fbea36c1e45481d9430a27ea116719c4902bdfbdeee54605 \
+    --hash=sha256:c2f679de6a0540fabef6d39fb43fce4c0ceb1a506e667c1fd7153abf362c0368
+    # via ev-charging (pyproject.toml)
 opentelemetry-exporter-http-transport==0.66b1 \
     --hash=sha256:2f95404bdee7f9d2d529c7de56c7bd86d014d774d8fbf137810e0167f8a492bf \
     --hash=sha256:443080203bf52586ce0b2ad901e8951c61833eab1aa539ae6f1f16fe9e8e7952
@@ -250,6 +255,7 @@ opentelemetry-instrumentation==0.66b1 \
     --hash=sha256:4c4aa14dc9a24a02325a9d4c42c4d0208dbb1374c2b1b8fe6c9392d59f3e1008 \
     --hash=sha256:e79a510f7d87c72d95e964ddb42193a0d9a75668c027d980eab032ea1322a5ce
     # via
+    #   opentelemetry-distro
     #   opentelemetry-instrumentation-asgi
     #   opentelemetry-instrumentation-dbapi
     #   opentelemetry-instrumentation-fastapi
@@ -280,7 +286,7 @@ opentelemetry-sdk==1.45.1 \
     --hash=sha256:63d24a6ca645019a631e6a51999c73e93adcac1196ca640b8ae78a7cc4762bf3 \
     --hash=sha256:c604c11dc429810812348989115fa44bd558772a3d7442afc43d024f2c250ca4
     # via
-    #   ev-charging (pyproject.toml)
+    #   opentelemetry-distro
     #   opentelemetry-exporter-otlp-common
     #   opentelemetry-exporter-otlp-proto-http
 opentelemetry-semantic-conventions==0.66b1 \
@@ -390,10 +396,6 @@ psycopg-binary==3.3.6 ; implementation_name != 'pypy' \
     --hash=sha256:fa34eb47969297471db7b7f193622c7e3ee839ec05abd05f1fe104d5b1b1dcf4 \
     --hash=sha256:fdccb3a0e184b03e9baa673b15a809cf36c339c85dbda0ebc25a698846dfbee8
     # via psycopg
-psycopg-pool==3.3.3 \
-    --hash=sha256:9b9cd6a4fcec47a410f7e82d408540e7f77b478509e91b44c1a5457a13e5ff37 \
-    --hash=sha256:df87b5d9d0ad7db37f6cdad4fa8ce113d250f5997f6db38e9a99192fb67f9e1d
-    # via ev-charging (pyproject.toml)
 pydantic==2.14.1 \
     --hash=sha256:9195d967ec791692a04438115466764fb8b9a27b31f14a760437694f40d6b454 \
     --hash=sha256:94f478203dd03404682a1ada216965651dd74b1d2d5ffd62e00e0837caab5c26
@@ -557,7 +559,6 @@ typing-extensions==4.16.0 \
     #   opentelemetry-exporter-otlp-proto-http
     #   opentelemetry-sdk
     #   opentelemetry-semantic-conventions
-    #   psycopg-pool
     #   pydantic
     #   pydantic-core
     #   typing-inspection

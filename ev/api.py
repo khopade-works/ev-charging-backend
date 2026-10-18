@@ -1,13 +1,17 @@
 import asyncio
+import json
+import logging
 import os
+import time
 from decimal import Decimal
 
-from fastapi import FastAPI, Request
+import psycopg
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
-from prometheus_client import start_http_server
+from opentelemetry import trace
+from prometheus_client import Counter, Histogram, start_http_server
 from pydantic import BaseModel
 
-from ev import __version__
 from ev.domain import (
     ChargingSession,
     Conflict,
@@ -22,19 +26,28 @@ from ev.domain import (
     Station,
     Vehicle,
 )
-from ev.observability import (
-    BUILD_INFO,
-    SESSIONS_ENDED,
-    SESSIONS_STARTED,
-    START_REJECTED,
-    observe_requests,
-    setup_logging,
-    setup_tracing,
-)
+from ev.pgstore import PostgresStore
 from ev.pricing import PEAKS
 from ev.selection import STRATEGIES
 from ev.service import ChargingService
-from ev.store import InMemoryStore, Store
+from ev.store import InMemoryStore
+
+REQUESTS = Counter("http_requests", "HTTP requests served", ["method", "route", "status"])
+LATENCY = Histogram("http_request_duration_seconds", "HTTP request latency", ["method", "route"])
+STARTED = Counter("ev_charging_sessions_started", "Charging sessions started")
+REJECTED = Counter("ev_charging_session_start_rejected", "Charging session starts rejected", ["reason"])
+PROBES = ("/version", "/readyz")  # kept out of metrics and logs: they would drown real traffic
+log = logging.getLogger("ev")
+
+
+class JsonFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        trace_id = trace.get_current_span().get_span_context().trace_id  # links a log line to its trace in Jaeger
+        doc = {"ts": self.formatTime(record), "level": record.levelname, "logger": record.name,
+               "msg": record.getMessage(), "trace_id": f"{trace_id:032x}", **getattr(record, "fields", {})}
+        if record.exc_info:
+            doc["exc"] = self.formatException(record.exc_info)
+        return json.dumps(doc)
 
 
 class VehicleIn(BaseModel):
@@ -84,58 +97,48 @@ def _handler(status: int):
     return handle
 
 
-def _choice(name: str, options: dict, default: str):
-    """Fail fast on a bad setting: the pod never turns Ready, so a rolling update stops and rolls back."""
-    value = os.environ.get(name, default)
-    if value not in options:
-        raise SystemExit(f"invalid {name}={value!r}; expected one of {sorted(options)}")
-    return options[value]
-
-
-def _store() -> Store:
-    if _choice("EV_STORE", {"memory": "memory", "postgres": "postgres"}, "memory") == "postgres":
-        from ev.pgstore import PostgresStore  # psycopg is only needed when Postgres is selected
-
-        return PostgresStore()
-    return InMemoryStore()
-
-
 def create_app(service: ChargingService | None = None) -> FastAPI:
-    git_sha = os.environ.get("EV_GIT_SHA", "unknown")
-    app = FastAPI(version=__version__)
-    setup_tracing(app, git_sha)  # before the store opens connections, so database calls are traced
     if service is None:
-        setup_logging()
         service = ChargingService(
-            _store(),
-            strategy=_choice("EV_STRATEGY", STRATEGIES, "nearest"),
-            peak=_choice("EV_PEAK", PEAKS, "time"),
+            PostgresStore() if os.environ.get("EV_STORE") == "postgres" else InMemoryStore(),
+            strategy=STRATEGIES[os.environ.get("EV_STRATEGY", "nearest")],
+            peak=PEAKS[os.environ.get("EV_PEAK", "time")],  # a bad value fails startup, so a bad release never turns Ready
         )
-        if port := os.environ.get("EV_METRICS_PORT"):
-            start_http_server(int(port))  # a separate port, so the public Service never exposes /metrics
     svc = service
-    BUILD_INFO.labels(__version__, git_sha).set(1)
-    observe_requests(app)
+    app = FastAPI()
     app.add_exception_handler(NotFound, _handler(404))
     app.add_exception_handler(Conflict, _handler(409))
     app.add_exception_handler(InvalidInput, _handler(422))
 
-    # Probes are async so they never queue behind requests in the route threadpool: a busy pod is not a dead one.
-    @app.get("/healthz")
-    async def healthz() -> dict[str, str]:
-        return {"status": "ok"}  # liveness: the process serves HTTP; dependencies are readiness's job
+    @app.middleware("http")
+    async def observe(request: Request, call_next):
+        started, status = time.perf_counter(), 500
+        try:
+            response = await call_next(request)
+            status = response.status_code
+            return response
+        finally:
+            route = request.scope.get("route")
+            path = route.path if route else "unmatched"  # the route template keeps label cardinality bounded
+            if path not in PROBES:
+                elapsed = time.perf_counter() - started
+                REQUESTS.labels(request.method, path, status).inc()
+                LATENCY.labels(request.method, path).observe(elapsed)
+                fields = {"method": request.method, "route": path, "status": status, "ms": round(elapsed * 1000, 1)}
+                log.info("request", extra={"fields": fields})
+
+    # Probes are async so they never queue behind requests in the threadpool: a busy pod is not a dead one.
+    @app.get("/version")  # also the liveness probe: answers without touching the database
+    async def version() -> dict[str, str]:
+        return {"git_sha": os.environ.get("EV_GIT_SHA", "unknown")}
 
     @app.get("/readyz")
-    async def readyz() -> JSONResponse:
+    async def readyz() -> dict[str, str]:
         try:
-            await asyncio.to_thread(svc.ping)  # asyncio's executor, not the request threadpool
-        except Exception as exc:  # any database failure means: take this pod out of the Service
-            return JSONResponse(status_code=503, content={"status": "unavailable", "error": type(exc).__name__})
-        return JSONResponse({"status": "ready"})
-
-    @app.get("/version")
-    def version() -> dict[str, str]:
-        return {"version": __version__, "git_sha": git_sha}
+            await asyncio.to_thread(svc.ping)
+        except psycopg.Error as exc:
+            raise HTTPException(503, "database unreachable") from exc
+        return {"status": "ready"}
 
     @app.post("/drivers", status_code=201)
     def register_driver(body: DriverIn) -> Driver:
@@ -165,26 +168,22 @@ def create_app(service: ChargingService | None = None) -> FastAPI:
 
     @app.post("/sessions", status_code=201)
     def start_session(body: StartIn) -> ChargingSession:
-        try:
+        try:  # user success: a rejection (no free connector, bad promo) is a correct answer, but a driver didn't charge
             here = Location(body.lat, body.lon)
-            s = svc.start_session(body.driver_id, here, body.radius_km, body.connector_type, body.promo_code)
+            session = svc.start_session(body.driver_id, here, body.radius_km, body.connector_type, body.promo_code)
         except DomainError as exc:
-            START_REJECTED.labels(type(exc).__name__).inc()
+            REJECTED.labels(type(exc).__name__).inc()
             raise
-        SESSIONS_STARTED.labels(s.connector_type, s.billed_type).inc()
-        return s
+        STARTED.inc()
+        return session
 
     @app.post("/sessions/{session_id}/end")
     def end_session(session_id: int, body: EndIn) -> ChargingSession:
-        s = svc.end_session(session_id, body.energy_kwh)
-        SESSIONS_ENDED.labels("completed").inc()
-        return s
+        return svc.end_session(session_id, body.energy_kwh)
 
     @app.post("/sessions/{session_id}/cancel")
     def cancel_session(session_id: int) -> ChargingSession:
-        s = svc.cancel_session(session_id)
-        SESSIONS_ENDED.labels("cancelled").inc()
-        return s
+        return svc.cancel_session(session_id)
 
     @app.get("/drivers/{driver_id}/sessions")
     def driver_history(driver_id: int) -> dict[str, list[ChargingSession]]:
@@ -198,3 +197,10 @@ def create_app(service: ChargingService | None = None) -> FastAPI:
 
 
 app = create_app()
+if port := os.environ.get("EV_METRICS_PORT"):  # set in the image only; tests import this module too
+    handler = logging.StreamHandler()
+    handler.setFormatter(JsonFormatter())
+    logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
+    logging.getLogger("uvicorn").handlers.clear()  # uvicorn's own lines (startup, tracebacks) go out as JSON too
+    logging.getLogger("uvicorn").propagate = True
+    start_http_server(int(port))  # its own port, so the public Service never exposes /metrics

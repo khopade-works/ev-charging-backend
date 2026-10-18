@@ -1,30 +1,8 @@
 image:
   repository: ghcr.io/khopade-works/ev-charging-backend
-  tag: ""          # 40-char git sha; set with --set image.tag=<sha>
+  tag: ""                  # required: the git sha CI built
   pullPolicy: IfNotPresent
-
-replicaCount: 2
-
 config:
-  strategy: nearest     # nearest | cheapest | highest_power
-  peak: time            # none | time | load
-  logLevel: INFO
-  environment: local
-
+  peak: time               # none | time | load; anything else fails startup
 otel:
-  endpoint: http://jaeger.monitoring:4318   # empty string disables tracing
-
-resources:
-  requests:
-    cpu: 50m
-    memory: 128Mi
-  limits:
-    memory: 256Mi
-
-postgres:
-  image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24  # pinned digest
-  storage: 1Gi
-  existingSecret: ev-charging-db   # key "password", created out-of-band
-
-monitoring:
-  enabled: true
+  endpoint: http://jaeger.monitoring:4318

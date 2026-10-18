@@ -1,0 +1,21 @@
+{
+  "title": "EV Charging", "uid": "ev-charging", "schemaVersion": 39, "refresh": "10s",
+  "time": { "from": "now-1h", "to": "now" },
+  "panels": [
+    { "type": "timeseries", "title": "Requests/s by route and status", "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "targets": [ { "expr": "sum by (route, status) (rate(http_requests_total{namespace=\"ev\"}[1m]))", "legendFormat": "{{route}} {{status}}" } ] },
+    { "type": "timeseries", "title": "5xx ratio (SLO budget: 0.5%)", "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "percentunit" } },
+      "targets": [ { "expr": "sum(rate(http_requests_total{namespace=\"ev\",status=~\"5..\"}[5m])) / sum(rate(http_requests_total{namespace=\"ev\"}[5m]))", "legendFormat": "5xx ratio" } ] },
+    { "type": "timeseries", "title": "Latency p95 by route", "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "fieldConfig": { "defaults": { "unit": "s" } },
+      "targets": [ { "expr": "histogram_quantile(0.95, sum by (le, route) (rate(http_request_duration_seconds_bucket{namespace=\"ev\"}[5m])))", "legendFormat": "{{route}}" } ] },
+    { "type": "timeseries", "title": "Session starts: succeeded vs rejected (user success)", "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "targets": [ { "expr": "sum(rate(ev_charging_sessions_started_total{namespace=\"ev\"}[5m]))", "legendFormat": "started" },
+                   { "expr": "sum by (reason) (rate(ev_charging_session_start_rejected_total{namespace=\"ev\"}[5m]))", "legendFormat": "rejected: {{reason}}" } ] },
+    { "type": "stat", "title": "Available API pods", "gridPos": { "x": 0, "y": 16, "w": 6, "h": 6 },
+      "targets": [ { "expr": "kube_deployment_status_replicas_available{namespace=\"ev\",deployment=\"ev-charging\"}" } ] },
+    { "type": "table", "title": "Running image per pod (tag = git sha)", "gridPos": { "x": 6, "y": 16, "w": 18, "h": 6 },
+      "targets": [ { "expr": "kube_pod_container_info{namespace=\"ev\",container=\"api\"}", "format": "table", "instant": true } ] }
+  ]
+}

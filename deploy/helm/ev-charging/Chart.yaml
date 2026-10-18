@@ -1,7 +1,3 @@
 apiVersion: v2
 name: ev-charging
-description: EV charging backend (FastAPI API + Postgres)
-type: application
 version: 0.1.0
-# Only a fallback; every real deploy sets image.tag to the git sha, which also becomes the version label.
-appVersion: "dev"

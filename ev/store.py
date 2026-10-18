@@ -1,29 +1,6 @@
-import itertools
-import threading
-from contextlib import AbstractContextManager
-from typing import Protocol
+from contextlib import nullcontext
 
 from ev.domain import ChargingSession, Conflict, Driver, NotFound, PromoCode, Station
-
-
-class Store(Protocol):
-    """The driven port. ChargingService wraps every public method in one transaction()."""
-
-    def transaction(self) -> AbstractContextManager: ...
-    def ping(self) -> None: ...
-    def next_id(self, kind: str) -> int: ...
-    def add_driver(self, driver: Driver) -> None: ...
-    def get_driver(self, driver_id: int) -> Driver: ...
-    def add_station(self, station: Station) -> None: ...
-    def get_station(self, station_id: int) -> Station: ...
-    def list_stations(self) -> list[Station]: ...
-    def add_session(self, session: ChargingSession) -> None: ...
-    def get_session(self, session_id: int) -> ChargingSession: ...
-    def sessions_for_driver(self, driver_id: int) -> list[ChargingSession]: ...
-    def sessions_for_station(self, station_id: int) -> list[ChargingSession]: ...
-    def add_promo(self, promo: PromoCode) -> None: ...
-    def find_promo(self, code: str) -> PromoCode | None: ...
-    def delete_promo(self, code: str) -> None: ...
 
 
 class InMemoryStore:
@@ -32,18 +9,17 @@ class InMemoryStore:
         self._stations: dict[int, Station] = {}
         self._sessions: dict[int, ChargingSession] = {}
         self._promos: dict[str, PromoCode] = {}
-        self._ids = {kind: itertools.count(1) for kind in ("driver", "station", "session")}
-        # ponytail: one in-process lock = single-process ceiling; PostgresStore lifts it to many replicas.
-        self._lock = threading.Lock()
+        self._ids = dict.fromkeys(("driver", "station", "session"), 0)  # ints, not itertools.count: picklable
 
-    def transaction(self) -> AbstractContextManager:
-        return self._lock
+    def next_id(self, kind: str) -> int:
+        self._ids[kind] += 1
+        return self._ids[kind]
+
+    def transaction(self) -> nullcontext:
+        return nullcontext()  # the service lock is enough for one process; PostgresStore overrides this
 
     def ping(self) -> None:
         pass
-
-    def next_id(self, kind: str) -> int:
-        return next(self._ids[kind])
 
     def add_driver(self, driver: Driver) -> None:
         self._drivers[driver.id] = driver
