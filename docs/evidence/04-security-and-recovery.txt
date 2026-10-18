@@ -31,6 +31,7 @@ API pod -> Postgres: connected
 $ git grep -nI -e 'PGPASSWORD=' -e 'password:' -- . ':!README.md' ':!docs' | grep -v secretKeyRef || echo 'no credentials committed (password only via secretKeyRef)'
 .github/workflows/ci.yml:57:        with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
 .github/workflows/ci.yml:86:        with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+# ^ both hits are references to the Actions-provided GITHUB_TOKEN secret, not values: no credentials are committed.
 
 $ kubectl exec -n ev deploy/ev-charging -- python -c 'import os; print("uid", os.getuid())
 try: open("/x", "w")

@@ -11,6 +11,6 @@ All evidence was captured on 2026-10-18 against **application version [`22ba208`
 | [04-security-and-recovery.txt](04-security-and-recovery.txt) | **Security:** PSA `restricted` rejects a privileged pod; the app runs as uid 10001 on a read-only root filesystem with no pip; `/metrics` is not on the public port; the NetworkPolicy blocks a non-API pod from Postgres while the API pod connects; no committed credentials. **Fault 1, database down:** readiness returns 503, both pods leave the Service, and clients get no response rather than 500s. After recovery there are 0 restarts and pre-outage data is kept. **Fault 2, bad release:** `EV_PEAK=bogus` never becomes Ready, Helm rolls back automatically, `/version` stays on the good sha and the user journey passes. | Kubernetes operation, security, reliability |
 
 **Limitations of this evidence:**
-- The rate values in `03` come from pods that were only a few minutes old, so `increase()` is extrapolated over a short window.
+- The metrics in `03` are raw counters (totals since the pods started), not rates over long windows.
 - No alert was driven into the firing state. The rules are shown as loaded and healthy, and the response to each one is in the [runbook](../RUNBOOK.md).
 - The local cluster is the only "production"; there is no staging.
