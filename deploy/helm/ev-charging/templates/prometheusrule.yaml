@@ -1,0 +1,72 @@
+{{- if and .Values.monitoring.enabled (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1") }}
+{{- $ns := .Release.Namespace }}
+{{- $runbook := "https://github.com/khopade-works/ev-charging-backend/blob/main/docs/RUNBOOK.md" }}
+# SLO: 99.5% of API requests are not 5xx (error budget 0.5%), probe and /metrics routes excluded.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: ev-charging
+  labels:
+    {{- include "ev.labels" . | nindent 4 }}
+spec:
+  groups:
+    - name: ev-charging.slo.recording
+      rules:
+        {{- range list "5m" "30m" "1h" "6h" }}
+        - record: ev:http_error_ratio:rate{{ . }}
+          expr: |
+            sum(rate(http_requests_total{namespace="{{ $ns }}",route!~"/healthz|/readyz|/metrics",status=~"5.."}[{{ . }}]))
+            / sum(rate(http_requests_total{namespace="{{ $ns }}",route!~"/healthz|/readyz|/metrics"}[{{ . }}]))
+        {{- end }}
+        - record: ev:http_availability:ratio_rate5m
+          expr: 1 - ev:http_error_ratio:rate5m
+    - name: ev-charging.alerts
+      rules:
+        # Burn rate 14.4x spends 2% of a 30-day budget in 1h; both windows must agree so it resets quickly.
+        - alert: EvChargingErrorBudgetBurnFast
+          expr: ev:http_error_ratio:rate5m > (14.4 * 0.005) and ev:http_error_ratio:rate1h > (14.4 * 0.005)
+          labels: { severity: critical }
+          annotations:
+            summary: API is burning the 99.5% availability error budget at >14.4x
+            runbook_url: {{ $runbook }}#evchargingerrorbudgetburnfast
+        # Burn rate 6x spends 5% of the budget in 6h.
+        - alert: EvChargingErrorBudgetBurnSlow
+          expr: ev:http_error_ratio:rate30m > (6 * 0.005) and ev:http_error_ratio:rate6h > (6 * 0.005)
+          labels: { severity: warning }
+          annotations:
+            summary: API is burning the 99.5% availability error budget at >6x
+            runbook_url: {{ $runbook }}#evchargingerrorbudgetburnslow
+        - alert: EvChargingHighLatency
+          expr: |
+            histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{namespace="{{ $ns }}"}[5m]))) > 0.3
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: API p95 latency above 300ms for 10 minutes
+            runbook_url: {{ $runbook }}#evcharginghighlatency
+        - alert: EvChargingNoReadyPods
+          expr: kube_deployment_status_replicas_available{namespace="{{ $ns }}",deployment="ev-charging"} < 1
+          for: 1m
+          labels: { severity: critical }
+          annotations:
+            summary: No API pod is available
+            runbook_url: {{ $runbook }}#evchargingnoreadypods
+        - alert: EvChargingDatabaseDown
+          expr: kube_statefulset_status_replicas_ready{namespace="{{ $ns }}",statefulset="ev-charging-db"} == 0
+          for: 1m
+          labels: { severity: critical }
+          annotations:
+            summary: Postgres has no ready replica
+            runbook_url: {{ $runbook }}#evchargingdatabasedown
+        - alert: EvChargingSessionStartRejectionsHigh
+          expr: |
+            sum(rate(ev_charging_session_start_rejected_total{namespace="{{ $ns }}"}[10m]))
+            # "or vector(0)": the started counter has no series until the first success, which would blank the alert at 100% rejection.
+            / ((sum(rate(ev_charging_sessions_started_total{namespace="{{ $ns }}"}[10m])) or vector(0))
+               + sum(rate(ev_charging_session_start_rejected_total{namespace="{{ $ns }}"}[10m])))
+            > 0.5
+          labels: { severity: warning }
+          annotations:
+            summary: More than half of session starts were rejected over 10 minutes
+            runbook_url: {{ $runbook }}#evchargingsessionstartrejectionshigh
+{{- end }}

@@ -1,0 +1,47 @@
+# kind runs these control-plane components bound to localhost, so scraping them only produces false alerts.
+kubeEtcd: { enabled: false }
+kubeScheduler: { enabled: false }
+kubeControllerManager: { enabled: false }
+kubeProxy: { enabled: false }
+
+grafana:
+  admin:
+    existingSecret: grafana-admin
+    userKey: admin-user
+    passwordKey: admin-password
+  service:
+    type: NodePort
+    nodePort: 30300
+  sidecar:
+    datasources:
+      uid: prometheus   # dashboards reference the Prometheus datasource by this uid
+    dashboards:
+      searchNamespace: ALL
+  additionalDataSources:
+    - name: Jaeger
+      type: jaeger
+      uid: jaeger
+      url: http://jaeger.monitoring:16686
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits: { memory: 256Mi }
+
+prometheus:
+  service:
+    type: NodePort
+    nodePort: 30090
+  prometheusSpec:
+    retention: 2d
+    # Pick up ServiceMonitors/PodMonitors/PrometheusRules from every release, not only ones labelled for kps.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+    resources:
+      requests: { cpu: 100m, memory: 400Mi }
+      limits: { memory: 1Gi }
+
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests: { cpu: 10m, memory: 32Mi }
+      limits: { memory: 128Mi }

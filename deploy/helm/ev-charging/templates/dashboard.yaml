@@ -1,0 +1,13 @@
+{{- if .Values.monitoring.enabled }}
+# Picked up by the Grafana dashboard sidecar (kube-prometheus-stack) in any namespace.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ev-charging-dashboard
+  labels:
+    {{- include "ev.labels" . | nindent 4 }}
+    grafana_dashboard: "1"
+data:
+  ev-charging.json: |-
+    {{- .Files.Get "dashboards/ev-charging.json" | nindent 4 }}
+{{- end }}

@@ -3,7 +3,7 @@ from fastapi.testclient import TestClient
 
 from ev.api import create_app
 from ev.service import ChargingService
-from ev.store import InMemoryStore
+from tests.stores import DATABASE_URL, new_store
 
 DRIVER = ("POST", "/drivers", {"name": "Asha", "vehicle": {"model": "Nexon EV", "connector_types": ["AC", "DC"]}})
 STATION_BODY = {
@@ -20,7 +20,7 @@ END = ("POST", "/sessions/1/end", {"energy_kwh": "12.5"})
 
 
 def client() -> TestClient:
-    return TestClient(create_app(ChargingService(InMemoryStore())))
+    return TestClient(create_app(ChargingService(new_store())))
 
 
 def test_api_happy_path():
@@ -72,3 +72,15 @@ def test_api_error_mapping(setup, request_, status, error):
         assert "detail" in r.json()
     else:
         assert r.json()["error"] == error
+
+
+@pytest.mark.skipif(not DATABASE_URL, reason="Postgres-only: the in-memory store accepts any string")
+@pytest.mark.parametrize("method, path, body", [
+    ("POST", "/drivers", {**DRIVER[2], "name": "A\u0000sha"}),
+    ("POST", "/promos", {"code": "NUL\u0000", "percent_off": 10}),
+    ("DELETE", "/promos/NUL%00", None),
+])
+def test_unstorable_input_is_422_not_500(method, path, body):
+    r = client().request(method, path, json=body)
+    assert r.status_code == 422
+    assert r.json()["error"] == "InvalidInput"

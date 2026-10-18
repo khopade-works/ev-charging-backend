@@ -1,0 +1,77 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: ev-charging-db
+  labels:
+    {{- include "ev.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+spec:
+  serviceName: ev-charging-db
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "ev.selector" . | nindent 6 }}
+      app.kubernetes.io/component: database
+  template:
+    metadata:
+      # No version label here: it is the app's git sha, and changing it would restart Postgres on every release.
+      labels:
+        {{- include "ev.selector" . | nindent 8 }}
+        app.kubernetes.io/component: database
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        # 70 is the postgres user in the alpine image; fsGroup makes the volume writable for it.
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
+        fsGroup: 70
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: {{ .Values.postgres.image }}
+          ports:
+            - { name: postgres, containerPort: 5432 }
+          env:
+            - { name: POSTGRES_USER, value: ev }
+            - { name: POSTGRES_DB, value: ev }
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.existingSecret }}
+                  key: password
+            # Subdirectory: initdb refuses a volume root that contains lost+found.
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          readinessProbe:
+            exec: { command: [pg_isready, -U, ev, -d, ev, -h, 127.0.0.1] }
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            exec: { command: [pg_isready, -U, ev, -d, ev, -h, 127.0.0.1] }
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 3
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { memory: 512Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+            - { name: run, mountPath: /var/run/postgresql }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - { name: run, emptyDir: {} }
+        - { name: tmp, emptyDir: {} }
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ .Values.postgres.storage }}

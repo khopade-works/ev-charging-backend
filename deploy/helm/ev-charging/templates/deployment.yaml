@@ -1,0 +1,116 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ev-charging
+  labels:
+    {{- include "ev.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+  annotations:
+    ev-charging/git-sha: {{ include "ev.tag" . | quote }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  revisionHistoryLimit: 5
+  minReadySeconds: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "ev.selector" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      labels:
+        {{- include "ev.labels" . | nindent 8 }}
+        app.kubernetes.io/component: api
+      annotations:
+        ev-charging/git-sha: {{ include "ev.tag" . | quote }}
+    spec:
+      serviceAccountName: ev-charging
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    {{- include "ev.selector" . | nindent 20 }}
+                    app.kubernetes.io/component: api
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "ev.selector" . | nindent 14 }}
+              app.kubernetes.io/component: api
+      containers:
+        - name: api
+          image: "{{ .Values.image.repository }}:{{ include "ev.tag" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - { name: http, containerPort: 8000 }
+            - { name: metrics, containerPort: 9000 }
+          env:
+            - { name: EV_STORE, value: postgres }
+            - { name: PGHOST, value: ev-charging-db }
+            - { name: PGPORT, value: "5432" }
+            - { name: PGDATABASE, value: ev }
+            - { name: PGUSER, value: ev }
+            - name: PGPASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgres.existingSecret }}
+                  key: password
+            - { name: EV_STRATEGY, value: {{ .Values.config.strategy | quote }} }
+            - { name: EV_PEAK, value: {{ .Values.config.peak | quote }} }
+            - { name: LOG_LEVEL, value: {{ .Values.config.logLevel | quote }} }
+            {{- with .Values.otel.endpoint }}
+            - { name: OTEL_EXPORTER_OTLP_ENDPOINT, value: {{ . | quote }} }
+            {{- end }}
+            - { name: OTEL_SERVICE_NAME, value: ev-charging }
+            - { name: OTEL_RESOURCE_ATTRIBUTES, value: "deployment.environment={{ .Values.config.environment }}" }
+          startupProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: { path: /readyz, port: http }
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+          lifecycle:
+            # Keep serving while the endpoint removal propagates to kube-proxy, then get SIGTERM.
+            preStop:
+              sleep:
+                seconds: 5
+          # No CPU limit: CFS throttling would add latency spikes; the request still guarantees a fair share.
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}

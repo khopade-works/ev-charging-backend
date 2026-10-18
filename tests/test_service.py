@@ -17,7 +17,7 @@ from ev.domain import (
 from ev.pricing import by_load, by_time, no_peak
 from ev.selection import cheapest, highest_power, nearest
 from ev.service import ChargingService
-from ev.store import InMemoryStore
+from tests.stores import new_store
 
 AC, DC = ConnectorType.AC, ConnectorType.DC
 T0 = datetime(2026, 9, 28, 6, 30, tzinfo=timezone.utc)
@@ -26,7 +26,7 @@ HERE = Location(12.9340, 77.6230)
 
 def make_service(strategy=nearest, peak=no_peak):
     now = [T0]
-    return ChargingService(InMemoryStore(), strategy, peak, clock=lambda: now[0]), now
+    return ChargingService(new_store(), strategy, peak, clock=lambda: now[0]), now
 
 
 def add_station(svc, k, *connectors):
@@ -35,6 +35,17 @@ def add_station(svc, k, *connectors):
 
 def add_driver(svc, *types):
     return svc.register_driver("driver", Vehicle("car", frozenset(types)))
+
+
+# Read and write through the store: with Postgres, objects returned by earlier calls are snapshots.
+def connector_status(svc, station_id, connector_id=1):
+    with svc._store.transaction():
+        return svc._store.get_station(station_id).connector(connector_id).status
+
+
+def claim(svc, station_id, connector_id):
+    with svc._store.transaction():
+        svc._store.get_station(station_id).connector(connector_id).claim()
 
 
 def test_start_picks_nearest_free_compatible():
@@ -84,7 +95,7 @@ def test_take_out_while_occupied_rejected():
     with pytest.raises(Conflict):
         svc.take_out_of_service(station.id, 1)
     assert svc.end_session(s.id, Decimal(10)).status is SessionStatus.COMPLETED
-    assert station.connector(1).status is ConnectorStatus.AVAILABLE
+    assert connector_status(svc, station.id) is ConnectorStatus.AVAILABLE
     assert svc.take_out_of_service(station.id, 1).status is ConnectorStatus.OUT_OF_SERVICE
 
 
@@ -155,7 +166,8 @@ def test_failed_start_claims_nothing(case, error):
     with pytest.raises(error):
         svc.start_session(driver.id, HERE, 5, AC, code)
     held = {s.connector_id for s in svc.station_history(station.id)["active"]}
-    assert all(c.status is ConnectorStatus.AVAILABLE for c in station.connectors if c.id not in held)
+    assert all(connector_status(svc, station.id, c.id) is ConnectorStatus.AVAILABLE
+               for c in station.connectors if c.id not in held)
     assert svc.start_session(add_driver(svc, AC).id, HERE, 5, AC).status is SessionStatus.ACTIVE
 
 
@@ -199,7 +211,7 @@ def test_end_invalid_energy_keeps_session_active():
     with pytest.raises(InvalidInput):
         svc.end_session(s.id, Decimal(-1))
     assert s.status is SessionStatus.ACTIVE
-    assert station.connector(1).status is ConnectorStatus.OCCUPIED
+    assert connector_status(svc, station.id) is ConnectorStatus.OCCUPIED
     assert svc.end_session(s.id, Decimal(10)).bill.total == Decimal("200.00")
 
 
@@ -219,7 +231,7 @@ def test_terminal_session_rejects_end_and_cancel(first, second):
     s2 = svc.start_session(add_driver(svc, DC).id, HERE, 5, DC)
     with pytest.raises(Conflict):
         OPS[second](svc, s1.id)
-    assert station.connector(1).status is ConnectorStatus.OCCUPIED
+    assert connector_status(svc, station.id) is ConnectorStatus.OCCUPIED
     assert svc.station_history(station.id)["active"] == [s2]
 
 
@@ -249,7 +261,7 @@ def test_cancel_charges_fee_and_releases():
     s = svc.cancel_session(svc.start_session(add_driver(svc, AC).id, HERE, 5, AC).id)
     assert s.status is SessionStatus.CANCELLED
     assert s.bill.total == Decimal("50.00")
-    assert station.connector(1).status is ConnectorStatus.AVAILABLE
+    assert connector_status(svc, station.id) is ConnectorStatus.AVAILABLE
 
 
 @pytest.mark.parametrize(
@@ -276,7 +288,7 @@ def test_strategy_switch_changes_station(strategy, peak, expected):
     a = add_station(svc, 1, (DC, 50), (DC, 50))
     b = add_station(svc, 2, (DC, 150), (DC, 150))
     c = add_station(svc, 3, (DC, 60))
-    a.connectors[0].claim()
-    b.connectors[0].claim()
+    claim(svc, a.id, 1)
+    claim(svc, b.id, 1)
     s = svc.start_session(add_driver(svc, DC).id, HERE, 5, DC)
     assert s.station_id == {"A": a.id, "B": b.id, "C": c.id}[expected]

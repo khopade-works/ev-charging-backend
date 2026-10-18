@@ -1,0 +1,227 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/khopade-works/ev-charging-backend
+  # The commit under test. On a PR, github.sha is a temporary merge commit; test, tag and deploy the PR head instead,
+  # so the image tag, /version and `gh run list --commit` all name the same commit.
+  SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: ev
+          POSTGRES_PASSWORD: ev
+          POSTGRES_DB: ev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SHA }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+          cache: pip
+      - run: pip install --require-hashes -r requirements-dev.txt
+      - run: ruff check .
+      - name: Tests (in-memory store)
+        run: pytest -q
+      - name: Tests (Postgres store)
+        env:
+          EV_TEST_DATABASE_URL: postgresql://ev:ev@localhost:5432/ev
+        run: pytest -q
+
+  security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - run: pip install pip-audit
+      - run: pip-audit --require-hashes -r requirements.txt
+      # trivy-action v0.36.0 bundles setup-trivy v0.2.6 (released mid-incident); pin a later one.
+      - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          version: v0.70.0
+      - name: Trivy config scan (Dockerfile + Helm chart)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          skip-setup-trivy: true
+          scan-type: config
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+
+  build:
+    needs: [test, security]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SHA }}
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Image created timestamp
+        id: meta
+        run: echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        id: push
+        with:
+          context: .
+          push: true
+          tags: ${{ env.IMAGE }}:${{ env.SHA }}
+          build-args: GIT_SHA=${{ env.SHA }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ env.SHA }}
+            org.opencontainers.image.created=${{ steps.meta.outputs.created }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Summary
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          {
+            echo "### Image"
+            echo "- tag: \`$IMAGE:$SHA\`"
+            echo "- digest: \`$DIGEST\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567 # v0.3.1
+        with:
+          version: v0.70.0
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          skip-setup-trivy: true
+          image-ref: ${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+
+  e2e:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      packages: read
+    env:
+      BASE: http://127.0.0.1:8080
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SHA }}
+          persist-credentials: false
+      - uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
+        with:
+          config: deploy/kind/cluster.yaml
+          cluster_name: ev
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.1  # same as local: Helm 4 flags (--rollback-on-failure) in scripts and CI
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # Loading the image into kind nodes avoids image pull secrets in the cluster.
+      - name: Load image into kind
+        env:
+          DIGEST: ${{ needs.build.outputs.digest }}
+        run: |
+          docker pull "$IMAGE@$DIGEST"
+          docker tag "$IMAGE@$DIGEST" "$IMAGE:$SHA"
+          kind load docker-image --name ev "$IMAGE:$SHA"
+      - name: Namespace and DB secret
+        run: |
+          kubectl apply -f deploy/k8s/namespace.yaml
+          kubectl create secret generic ev-charging-db -n ev \
+            --from-literal=password="$(openssl rand -hex 24)"
+      - name: Deploy
+        run: |
+          helm upgrade --install ev deploy/helm/ev-charging -n ev \
+            --set image.tag="$SHA" --set image.pullPolicy=Never \
+            --set otel.endpoint= --rollback-on-failure --wait --timeout 5m
+      - name: Verify version and smoke test
+        id: smoke
+        run: |
+          test "$(curl -fsS "$BASE/version" | jq -r .git_sha)" = "$SHA"
+          scripts/smoke.sh
+      - name: Bad release must roll back
+        id: rollback
+        run: |
+          if helm upgrade ev deploy/helm/ev-charging -n ev --reuse-values \
+              --set config.peak=bogus --rollback-on-failure --wait --timeout 90s; then
+            echo "bad release was accepted" >&2
+            exit 1
+          fi
+          helm history ev -n ev -o json | jq -e '.[-1].description | contains("Rollback")'
+          test "$(curl -fsS "$BASE/version" | jq -r .git_sha)" = "$SHA"
+          scripts/smoke.sh
+      - name: Summary
+        if: always()
+        env:
+          SMOKE: ${{ steps.smoke.outcome }}
+          ROLLBACK: ${{ steps.rollback.outcome }}
+        run: |
+          {
+            echo "### e2e"
+            if rev=$(helm history ev -n ev -o json 2>/dev/null | jq -r '.[-1].revision'); then
+              echo "- revision: $rev"
+            fi
+            echo "- sha: \`$SHA\`"
+            echo "- smoke: $SMOKE"
+            echo "- bad release rolled back + smoke: $ROLLBACK"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Debug dump
+        if: failure()
+        run: |
+          kubectl get all,events -n ev
+          kubectl logs -n ev -l app.kubernetes.io/component=api --tail=100

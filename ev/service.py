@@ -1,4 +1,3 @@
-import threading
 from collections.abc import Callable
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -20,7 +19,7 @@ from ev.domain import (
 )
 from ev.pricing import TARIFFS, PeakMultiplier, no_peak, no_show_bill, price
 from ev.selection import Candidate, Strategy, nearest
-from ev.store import InMemoryStore
+from ev.store import Store
 
 
 def utc_now() -> datetime:
@@ -28,24 +27,22 @@ def utc_now() -> datetime:
 
 
 class ChargingService:
-    def __init__(self, store: InMemoryStore, strategy: Strategy = nearest,
+    def __init__(self, store: Store, strategy: Strategy = nearest,
                  peak: PeakMultiplier = no_peak, clock: Callable[[], datetime] = utc_now) -> None:
         self._store = store
         self._strategy = strategy
         self._peak = peak
         self._clock = clock
-        # ponytail: one in-process lock = single-process ceiling. When persisted: partial UNIQUE indexes on sessions(connector_id) and sessions(driver_id) WHERE status='ACTIVE'; claim with UPDATE connectors SET status='OCCUPIED' WHERE id=? AND status='AVAILABLE' checking rowcount == 1, in the same transaction as the session INSERT; on 0 rows try the next candidate, else 409.
-        self._lock = threading.Lock()
 
     def register_driver(self, name: str, vehicle: Vehicle) -> Driver:
-        with self._lock:
+        with self._store.transaction():
             driver = Driver(self._store.next_id("driver"), name, vehicle)
             self._store.add_driver(driver)
             return driver
 
     def register_station(self, name: str, location: Location,
                          connectors: list[tuple[ConnectorType, float]]) -> Station:
-        with self._lock:
+        with self._store.transaction():
             station = Station(
                 self._store.next_id("station"), name, location,
                 [Connector(i, type, power_kw) for i, (type, power_kw) in enumerate(connectors, start=1)],
@@ -54,30 +51,30 @@ class ChargingService:
             return station
 
     def take_out_of_service(self, station_id: int, connector_id: int) -> Connector:
-        with self._lock:
+        with self._store.transaction():
             connector = self._store.get_station(station_id).connector(connector_id)
             connector.take_out_of_service()
             return connector
 
     def return_to_service(self, station_id: int, connector_id: int) -> Connector:
-        with self._lock:
+        with self._store.transaction():
             connector = self._store.get_station(station_id).connector(connector_id)
             connector.return_to_service()
             return connector
 
     def add_promo(self, code: str, percent_off: Decimal) -> PromoCode:
-        with self._lock:
+        with self._store.transaction():
             promo = PromoCode(code, percent_off)
             self._store.add_promo(promo)
             return promo
 
     def delete_promo(self, code: str) -> None:
-        with self._lock:
+        with self._store.transaction():
             self._store.delete_promo(code)
 
     def start_session(self, driver_id: int, here: Location, radius_km: float,
                       requested: ConnectorType, promo_code: str | None = None) -> ChargingSession:
-        with self._lock:
+        with self._store.transaction():
             now = self._clock()
             driver = self._store.get_driver(driver_id)
             if any(s.status is SessionStatus.ACTIVE for s in self._store.sessions_for_driver(driver.id)):
@@ -121,7 +118,7 @@ class ChargingService:
         return cands
 
     def end_session(self, session_id: int, energy_kwh: Decimal) -> ChargingSession:
-        with self._lock:
+        with self._store.transaction():
             session = self._store.get_session(session_id)
             connector = self._store.get_station(session.station_id).connector(session.connector_id)
             bill = price(TARIFFS[session.billed_type], energy_kwh, session.multiplier, session.promo)
@@ -130,20 +127,23 @@ class ChargingService:
             return session
 
     def cancel_session(self, session_id: int) -> ChargingSession:
-        with self._lock:
+        with self._store.transaction():
             session = self._store.get_session(session_id)
             connector = self._store.get_station(session.station_id).connector(session.connector_id)
             session.cancel(no_show_bill(), self._clock())
             connector.release()
             return session
 
+    def ping(self) -> None:
+        self._store.ping()  # readiness check; deliberately outside the lock so a long request can't fail it
+
     def driver_history(self, driver_id: int) -> dict[str, list[ChargingSession]]:
-        with self._lock:
+        with self._store.transaction():
             self._store.get_driver(driver_id)
             return self._history(self._store.sessions_for_driver(driver_id))
 
     def station_history(self, station_id: int) -> dict[str, list[ChargingSession]]:
-        with self._lock:
+        with self._store.transaction():
             self._store.get_station(station_id)
             return self._history(self._store.sessions_for_station(station_id))
 

@@ -1,0 +1,12 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ev-charging
+  labels:
+    {{- include "ev.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "ev.selector" . | nindent 6 }}
+      app.kubernetes.io/component: api
