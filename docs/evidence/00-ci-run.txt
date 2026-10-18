@@ -1,0 +1,86 @@
+# CI run 39148868151 for 22ba20890315ff15e08084556a4ff204954c21c4: tests, scans, build, and e2e on kind (incl. bad-release rollback)
+# captured 2026-10-18T23:00:10+05:30 on kind cluster 'ev' (context kind-ev)
+
+$ export GH_TOKEN=$(gh auth token -u khopade-works); gh run view 39148868151 -R khopade-works/ev-charging-backend --json headSha,event,conclusion,url,jobs --jq '"sha=\(.headSha) event=\(.event) conclusion=\(.conclusion)\n\(.url)", (.jobs[] | "\(.name): \(.conclusion)", (.steps[] | "    \(.conclusion)  \(.name)"))'
+sha=22ba20890315ff15e08084556a4ff204954c21c4 event=pull_request conclusion=success
+https://github.com/khopade-works/ev-charging-backend/actions/runs/39148868151
+test: success
+    success  Set up job
+    success  Initialize containers
+    success  Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+    success  Run actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+    success  Run pip install --require-hashes -r requirements-dev.txt
+    success  Run ruff check .
+    success  Run pytest -q
+    success  Run pytest -q
+    success  Run aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567
+    success  Security scan (dependency CVEs, committed secrets, Dockerfile/Helm/manifest misconfigurations)
+    success  Post Run aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567
+    success  Post Run actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+    success  Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+    success  Stop containers
+    success  Complete job
+build: success
+    success  Set up job
+    success  Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+    success  Run docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1
+    success  Run docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+    success  Run docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+    success  Run docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+    success  Run aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567
+    success  Image scan (fixable HIGH/CRITICAL CVEs)
+    success  Post Run aquasecurity/setup-trivy@81e514348e19b6112ce2a7e3ecbafe19c1e1f567
+    success  Post Run docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
+    success  Post Run docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+    success  Post Run docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069
+    success  Post Run docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1
+    success  Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+    success  Complete job
+e2e: success
+    success  Set up job
+    success  Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+    success  Run helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa
+    success  Run azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310
+    success  Run docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+    success  Load the built image into kind
+    success  Deploy
+    success  Running version is this commit, and the user journey works
+    success  A bad release is rolled back and the service keeps working
+    success  Post Run docker/login-action@dbcb813823bdd20940b903addbd779551569679f
+    success  Post Run helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa
+    success  Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+    success  Complete job
+
+$ export GH_TOKEN=$(gh auth token -u khopade-works); gh run view 39148868151 -R khopade-works/ev-charging-backend --log 2>/dev/null | grep -E 'passed in|Total: [0-9]|digest: sha256|ok   |PASS user journey|STATUS: deployed|REVISION:|UPGRADE FAILED|Rollback to|^e2e.*true$' | sed -E 's/^([a-z0-9]+)\t[^\t]*\t[0-9TZ:.-]+ /\1  /' | cut -c1-200
+test	Run pytest -q	2026-10-18T17:17:35.9384893Z 111 passed in 1.25s
+test	Run pytest -q	2026-10-18T17:17:40.6896724Z 113 passed in 4.35s
+e2e	Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1	2026-10-18T17:20:10.7160805Z   ssh-strict: true
+e2e	Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1	2026-10-18T17:20:10.7161654Z   clean: true
+e2e	Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1	2026-10-18T17:20:10.7162092Z   sparse-checkout-cone-mode: true
+e2e	Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1	2026-10-18T17:20:10.7163504Z   show-progress: true
+e2e	Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1	2026-10-18T17:20:10.7164846Z   set-safe-directory: true
+e2e	Run docker/login-action@dbcb813823bdd20940b903addbd779551569679f	2026-10-18T17:20:59.2199322Z   logout: true
+e2e  STATUS: deployed
+e2e  REVISION: 1
+e2e	Running version is this commit, and the user journey works	2026-10-18T17:21:24.4314621Z true
+e2e	Running version is this commit, and the user journey works	2026-10-18T17:21:24.4414795Z ok   GET /version -> 200
+e2e	Running version is this commit, and the user journey works	2026-10-18T17:21:24.4693539Z ok   POST /drivers -> 201
+e2e	Running version is this commit, and the user journey works	2026-10-18T17:21:24.4918265Z ok   POST /stations -> 201
+e2e	Running version is this commit, and the user journey works	2026-10-18T17:21:24.5143281Z ok   POST /promos -> 201
+e2e	Running version is this commit, and the user journey works	2026-10-18T17:21:24.5366679Z ok   POST /sessions -> 201
+e2e	Running version is this commit, and the user journey works	2026-10-18T17:21:24.5573126Z ok   POST /sessions -> 409
+e2e	Running version is this commit, and the user journey works	2026-10-18T17:21:24.5779868Z ok   POST /sessions/1/end -> 200
+e2e	Running version is this commit, and the user journey works	2026-10-18T17:21:24.6013152Z ok   GET /drivers/1/sessions -> 200
+e2e	Running version is this commit, and the user journey works	2026-10-18T17:21:24.6018548Z PASS user journey against http://127.0.0.1:8080
+e2e	A bad release is rolled back and the service keeps working	2026-10-18T17:22:55.2125826Z Error: UPGRADE FAILED: release ev failed, and has been rolled back due to rollback-on-failure being set: res
+e2e	A bad release is rolled back and the service keeps working	2026-10-18T17:22:55.3007287Z true
+e2e	A bad release is rolled back and the service keeps working	2026-10-18T17:22:55.3090741Z true
+e2e	A bad release is rolled back and the service keeps working	2026-10-18T17:22:55.3210196Z ok   GET /version -> 200
+e2e	A bad release is rolled back and the service keeps working	2026-10-18T17:22:55.3423763Z ok   POST /drivers -> 201
+e2e	A bad release is rolled back and the service keeps working	2026-10-18T17:22:55.3689341Z ok   POST /stations -> 201
+e2e	A bad release is rolled back and the service keeps working	2026-10-18T17:22:55.3898915Z ok   POST /promos -> 201
+e2e	A bad release is rolled back and the service keeps working	2026-10-18T17:22:55.4095671Z ok   POST /sessions -> 201
+e2e	A bad release is rolled back and the service keeps working	2026-10-18T17:22:55.4400038Z ok   POST /sessions -> 409
+e2e	A bad release is rolled back and the service keeps working	2026-10-18T17:22:55.4645275Z ok   POST /sessions/2/end -> 200
+e2e	A bad release is rolled back and the service keeps working	2026-10-18T17:22:55.4850199Z ok   GET /drivers/2/sessions -> 200
+e2e	A bad release is rolled back and the service keeps working	2026-10-18T17:22:55.4855363Z PASS user journey against http://127.0.0.1:8080

@@ -19,16 +19,9 @@ The DevOps work (PR [#1](https://github.com/khopade-works/ev-charging-backend/pu
 **Prerequisites** (macOS; tested with these versions): a Docker runtime (Colima 0.10 or Docker Desktop, ≥ 6 CPU / 10 GB for the VM), `kind` 0.33, `kubectl` 1.37, `helm` 4.3, `gh` (any account can read the public repo), `jq`, `openssl`. `brew install colima docker kind kubernetes-cli helm gh jq`, then `colima start --cpu 6 --memory 10`.
 
 ```bash
-# 1. Cluster + monitoring (kind 'ev', kube-prometheus-stack, Jaeger, namespace 'ev', random DB/Grafana secrets). Idempotent, ~5 min.
-scripts/bootstrap-cluster.sh
-
-# 2. Deploy a commit. Refuses unless CI passed for that exact sha; pulls the image CI built (ghcr.io/khopade-works/ev-charging-backend:<sha>),
-#    rolls it out (auto-rollback if it never turns Ready), checks /version == sha, runs the user journey.
-scripts/deploy.sh <40-char sha>          # e.g. the PR head: git rev-parse origin/devops-platform
-
-# 3. Use it
-curl -s http://127.0.0.1:8080/version
-BASE=http://127.0.0.1:8080 scripts/smoke.sh          # register → start (promo) → end with bill → history
+scripts/bootstrap-cluster.sh       # kind cluster 'ev', kube-prometheus-stack, Jaeger, namespace 'ev', random secrets; idempotent, ~5 min
+scripts/deploy.sh <40-char sha>    # refuses without a green CI run for that sha; deploys CI's image, checks /version, runs smoke.sh
+scripts/smoke.sh                   # the user journey: register → start with a promo → end with a bill → history
 ```
 
 | What | Where |
@@ -42,9 +35,9 @@ BASE=http://127.0.0.1:8080 scripts/smoke.sh          # register → start (promo
 
 All host ports bind to 127.0.0.1. Building and deploying without CI (e.g. offline): `docker build --build-arg GIT_SHA=$(git rev-parse HEAD) -t ghcr.io/khopade-works/ev-charging-backend:dev . && kind load docker-image --name ev ghcr.io/khopade-works/ev-charging-backend:dev && helm upgrade --install ev deploy/helm/ev-charging -n ev --set image.tag=dev --rollback-on-failure --wait`.
 
-**Tools:** GitHub Actions (CI), GHCR (images), kind, Helm, kube-prometheus-stack (Prometheus, Alertmanager, Grafana, kube-state-metrics), Jaeger v2 (OTLP), OpenTelemetry, Trivy, gitleaks, pip-audit, Dependabot.
+**Tools:** GitHub Actions, GHCR, kind, Helm, kube-prometheus-stack (Prometheus, Alertmanager, Grafana, kube-state-metrics), Jaeger v2, OpenTelemetry, Trivy.
 
-**Known limitations:** a single local cluster stands in for production (no staging environment); promotion is manual because GitHub cannot reach the laptop; Postgres is one replica with no backups (a lost PVC loses data); every write is serialised by one database lock (throughput ceiling; see DEVOPS.md §6); no TLS, no API authentication (baseline assumption A23); Alertmanager has no receiver configured (alerts are visible in Prometheus/Alertmanager UIs only); tracing is sampled at 100% into Jaeger's in-memory storage (lost on Jaeger restart).
+**Known limitations:** one local cluster stands in for production (no staging); promotion is manual because GitHub can't reach the laptop; Postgres is one replica without backups; every call loads the whole state and writes are serialised by one database lock (see [DEVOPS.md](docs/DEVOPS.md#architecture)); no TLS and no API authentication (assumption A23); Alertmanager has no receiver (alerts are visible in Prometheus); Jaeger keeps traces in memory.
 
 ## Quick start
 
@@ -267,7 +260,7 @@ Caveat on `cheapest`: tariffs are global and every candidate in a call shares th
 
 ### Persistence
 
-`InMemoryStore` holds everything in memory and loses it on restart. `PostgresStore` (`ev/pgstore.py`, selected with `EV_STORE=postgres`) persists each aggregate as a JSONB row. Because the service mutates entities in place, it keeps an identity map per transaction and writes back whatever changed at commit, so the `save()` calls below were not needed. The original estimate of what a database would touch:
+`InMemoryStore` holds everything in memory and loses it on restart. `PostgresStore` (`ev/pgstore.py`, selected with `EV_STORE=postgres`) subclasses it. Each service call takes a Postgres advisory lock, loads the whole state from one row, runs, and saves the state again, so the service needed no `save()` calls (ceiling: O(data) per call; see [docs/DEVOPS.md](docs/DEVOPS.md)). For comparison, here is what the original estimate said a database would touch:
 
 - a new store class with the same methods and semantics;
 - explicit `save()` calls at about 6 mutation sites in `service.py`;

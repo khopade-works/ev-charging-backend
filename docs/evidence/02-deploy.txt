@@ -1,0 +1,53 @@
+# Gated promotion of the CI-built image 22ba20890315ff15e08084556a4ff204954c21c4 to the local kind cluster
+# captured 2026-10-18T22:54:14+05:30 on kind cluster 'ev' (context kind-ev)
+# deploy.sh: green-CI gate -> helm rolling upgrade (auto-rollback on failure) -> /version == sha -> smoke.sh user journey
+
+$ git log --oneline -1 22ba20890315ff15e08084556a4ff204954c21c4
+22ba208 refactor(devops): ponytail audit, cut the implementation to the minimum
+
+$ export GH_TOKEN=$(gh auth token -u khopade-works); scripts/deploy.sh 0000000000000000000000000000000000000000; echo "exit=$?  (the gate refuses a commit without a green CI run)"
+exit=1  (the gate refuses a commit without a green CI run)
+no green CI run for 0000000000000000000000000000000000000000
+
+$ export GH_TOKEN=$(gh auth token -u khopade-works); scripts/deploy.sh 22ba20890315ff15e08084556a4ff204954c21c4
+CI: https://github.com/khopade-works/ev-charging-backend/actions/runs/39148868151
+Release "ev" has been upgraded. Happy Helming!
+NAME: ev
+LAST DEPLOYED: Sun Oct 18 22:54:17 2026
+NAMESPACE: ev
+STATUS: deployed
+REVISION: 2
+DESCRIPTION: sha=22ba20890315ff15e08084556a4ff204954c21c4 ci=https://github.com/khopade-works/ev-charging-backend/actions/runs/39148868151
+TEST SUITE: None
+{"git_sha":"22ba20890315ff15e08084556a4ff204954c21c4"}
+PASS user journey against http://127.0.0.1:8080
+ok   GET /version -> 200
+ok   POST /drivers -> 201
+ok   POST /stations -> 201
+ok   POST /promos -> 201
+ok   POST /sessions -> 201
+ok   POST /sessions -> 409
+ok   POST /sessions/3/end -> 200
+ok   GET /drivers/3/sessions -> 200
+
+$ helm history ev -n ev --max 4
+REVISION	UPDATED                 	STATUS    	CHART            	APP VERSION	DESCRIPTION                                                                                                                  
+1       	Sun Oct 18 22:44:59 2026	superseded	ev-charging-0.1.0	           	Install complete                                                                                                             
+2       	Sun Oct 18 22:54:17 2026	deployed  	ev-charging-0.1.0	           	sha=22ba20890315ff15e08084556a4ff204954c21c4 ci=https://github.com/khopade-works/ev-charging-backend/actions/runs/39148868151
+
+$ kubectl get pods -n ev -L app.kubernetes.io/version -o wide
+NAME                           READY   STATUS        RESTARTS   AGE   IP            NODE         NOMINATED NODE   READINESS GATES   VERSION
+ev-charging-665645f6df-cj9wz   1/1     Running       0          1s    10.244.1.23   ev-worker    <none>           <none>            22ba20890315ff15e08084556a4ff204954c21c4
+ev-charging-665645f6df-s2bx9   1/1     Running       0          50s   10.244.1.22   ev-worker    <none>           <none>            22ba20890315ff15e08084556a4ff204954c21c4
+ev-charging-669f78487f-fn9tf   1/1     Terminating   0          10m   10.244.1.20   ev-worker    <none>           <none>            min1
+ev-charging-669f78487f-fxjvs   1/1     Terminating   0          10m   10.244.2.9    ev-worker2   <none>           <none>            min1
+ev-charging-db-0               1/1     Running       0          10m   10.244.2.11   ev-worker2   <none>           <none>
+
+$ kubectl get pods -n ev -l app.kubernetes.io/component=api -o jsonpath='{range .items[*]}{.metadata.name}{"  "}{.spec.containers[0].image}{"  "}{.status.containerStatuses[0].imageID}{"\n"}{end}'
+ev-charging-665645f6df-cj9wz  ghcr.io/khopade-works/ev-charging-backend:22ba20890315ff15e08084556a4ff204954c21c4  ghcr.io/khopade-works/ev-charging-backend@sha256:c49c4b78010e122023dbec89db88c24c1edde45a24dc4812001a2f264fd9f771
+ev-charging-665645f6df-s2bx9  ghcr.io/khopade-works/ev-charging-backend:22ba20890315ff15e08084556a4ff204954c21c4  ghcr.io/khopade-works/ev-charging-backend@sha256:c49c4b78010e122023dbec89db88c24c1edde45a24dc4812001a2f264fd9f771
+ev-charging-669f78487f-fn9tf  ghcr.io/khopade-works/ev-charging-backend:min1  docker.io/library/import-2026-10-18@sha256:281617d5a9de974906d914dffa6302bf25f2b7139ba2095f7f533d9c2016de2b
+ev-charging-669f78487f-fxjvs  ghcr.io/khopade-works/ev-charging-backend:min1  docker.io/library/import-2026-10-18@sha256:281617d5a9de974906d914dffa6302bf25f2b7139ba2095f7f533d9c2016de2b
+
+$ curl -s 127.0.0.1:8080/version
+{"git_sha":"22ba20890315ff15e08084556a4ff204954c21c4"}
