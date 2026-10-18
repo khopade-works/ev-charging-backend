@@ -45,7 +45,7 @@ uv venv -p 3.14 .venv
 uv pip install --python .venv/bin/python -r pyproject.toml --extra test
 
 # or plain pip
-python3 -m venv .venv && .venv/bin/pip install fastapi uvicorn pytest httpx2
+python3 -m venv .venv && .venv/bin/pip install ".[test]"
 
 # tests
 .venv/bin/pytest -q
